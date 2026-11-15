@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in Hung to Dry is not working as expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. The most useful thing you can give me is your **log file**.
+        Please play until the problem happens, close the game, and then attach the log below.
+  - type: input
+    id: version
+    attributes:
+      label: Mod version
+      description: Shown in r2modman, or in the log as "Loading [Hung to Dry x.y.z]".
+      placeholder: "1.6.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Were you the host or a client?
+      options:
+        - Host
+        - Client
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you see instead? Which moon or room were you in?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: |
+        Drag your `LogOutput.log` into this box, or paste a link to it from https://mclo.gs.
+        In r2modman: Settings, then "Browse profile folder", then `BepInEx/LogOutput.log`.
+        The log contains your player name and some file paths, but no passwords.
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: Other mods and settings
+      description: Any other mods installed, and any changes you made to the Hung to Dry config file.
