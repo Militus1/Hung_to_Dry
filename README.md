@@ -1,10 +1,12 @@
 # Hung to Dry
 
-Bunker spiders no longer kill outright. They paralyse you, wrap you in silk, drag you to their lair and hang you from the ceiling. Hold a key to cut a teammate down before the timer runs out.
+Bunker spiders no longer kill outright. They paralyse you, wrap you in silk, drag you to their lair and hang you from the ceiling. Hold a key to cut a teammate down before the timer runs out. Brackens and loot bugs may steal the cocoon.
 
 The Bunker Spider's bite no longer kills. Instead, you're paralysed, wrapped in web and carried back to the spider's lair, where you're hung from the ceiling in a cocoon. You watch it all happen from a camera you can turn with the mouse. If nobody frees you before the timer runs out, you die in the cocoon.
 
-**Teammates can save you.** Stand near a hung cocoon and hold the cut-down key until the silk gives way.
+**Teammates can save you.** Stand near a hung cocoon and hold the cut-down key until the silk gives way. A countdown on your screen (and next to the cut-down prompt) shows how long is left.
+
+**Thieves.** A Bracken or a loot bug that spots a hung cocoon may cut it down and carry it away: the Bracken to its lair, the loot bug up over its head to its nest. The victim stays wrapped and gets 30 extra seconds, so find them fast. Nobody is spared by being carried off: if the timer runs out, they die.
 
 ## Features
 
@@ -12,6 +14,10 @@ The Bunker Spider's bite no longer kills. Instead, you're paralysed, wrapped in 
 - Look around while you're wrapped (mouse to turn, mouse wheel to zoom)
 - Teammates cut victims down by holding a key near the cocoon, with a short immunity afterwards
 - Everything is synced in multiplayer
+- **Thieves:** Brackens and loot bugs can steal a hung victim (the victim gets extra time)
+- **Death countdown** on the wrapped player's screen and next to the rescue prompt
+- Wrapped players cannot be targeted by any monster, and a freed player is left alone by every monster for a few seconds
+- A Bracken that loses its target keeps stalking instead of retreating; no black screen when a Bracken kills you
 - **Chase boost:** the spider speeds up as it closes in, but only while it has a clear line of sight to you, so breaking line of sight slows it down again
 - **Web alert:** step in a web and the spider sprints to it. The further away it is, the faster it runs
 - **Waiting camouflage:** a spider waiting motionless dissolves into flickering speckles (using the Barber's dissolve effect) and is easy to miss until you get close
@@ -33,12 +39,26 @@ The settings file is `BepInEx/config/Militus.HungToDry.cfg`. It appears after th
 | `SecondsHangingBeforeDeath` | 45 | How long a victim stays hung up before dying |
 | `CutDownKey` | E | Hold this near a hung cocoon to cut the victim down |
 | `CutDownSeconds` | 4 | How long the key must be held |
-| `ImmunitySeconds` | 10 | Time after a rescue when the spider cannot catch the player again |
+| `ImmunitySeconds` | 10 | Time after a rescue when no monster (spider, Bracken, loot bug) can target the freed player |
 | `VictimHoldSeconds` | 60 | Safety net: if the spider never hangs the victim, they are released after this long |
 | `CarryTimeoutSeconds` | 30 | A spider carrying a victim this long without hanging them hangs them where it is (0 = off) |
 | `WallReachMeters` | 0.8 | How close the spider must get to its wall spot before it hangs a victim (the game wants 0.1) |
 | `WrapOnCatch` | true | The spider wraps the victim where they were caught, then drags them to its lair (false = the game's own order) |
 | `StuckSeconds` | 8 | A spider standing still this long while carrying someone wraps (if needed) and hangs them where it stands |
+| `ShowDeathTimer` | true | Show the death countdown on the victim's screen and next to the cut-down prompt |
+| `StaysAfterChase` (`[Bracken]`) | true | A Bracken that loses its chase target goes back to stalking instead of retreating |
+| `NoBlackoutOnBrackenKill` (`[Bracken]`) | true | No fade to black when a Bracken kills you (you still die and spectate normally) |
+| `BrackenSteals` (`[Thieves]`) | true | A Bracken may carry a hung victim off to its lair |
+| `LootBugSteals` (`[Thieves]`) | true | A loot bug may carry a hung victim off to its nest |
+| `BrackenNoticeMeters` | 25 | How close a thief must be to a hung victim to notice them (shared by Bracken and loot bug) |
+| `BrackenStealChancePercent` | 50 | Chance that a thief that notices a victim goes for them (rolled once per victim) |
+| `BrackenStealDelaySeconds` | 5 | How long the victim must have been hanging before a thief may take them |
+| `BrackenReachMeters` | 2 | How close the thief has to get to take the victim |
+| `BrackenGiveUpSeconds` | 45 | A thief that has not reached the victim after this long gives up |
+| `BrackenScaredMeters` | 6 | A thief will not go for a victim while another player is this close |
+| `BrackenStealExtraSeconds` | 30 | Extra seconds added to the victim's death timer when they are stolen |
+| `LootBugCarryHeight` | 2.2 | How high (metres) above itself a loot bug holds the cocoon |
+| `LootBugRearUpDegrees` | 55 | How far a loot bug rears up while carrying (0 = stays on all fours, negative = tips the other way) |
 | `DropHeldItems` | true | Victims drop what they are holding when caught |
 | `LookSensitivity` | 0.12 | Mouse speed for the cocoon camera |
 | `ChaseBoostEnabled` | true | Spider speeds up as it closes in, only with line of sight |

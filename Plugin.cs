@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace SpiderCocoon
 {
-    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.6.7")]
+    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.7.0")]
     public class Plugin : BaseUnityPlugin
     {
         internal static ManualLogSource Log;
@@ -21,6 +21,20 @@ namespace SpiderCocoon
         internal static ConfigEntry<float> HangSeconds;      // time between being hung up and dying
         internal static ConfigEntry<float> ImmunitySeconds;  // only used if a victim is released
         internal static ConfigEntry<UnityEngine.InputSystem.Key> CutDownKey;   // hold this near a hung cocoon to rescue
+        internal static ConfigEntry<bool> BrackenStaysAfterChase;
+        internal static ConfigEntry<float> LootBugCarryHeight;
+        internal static ConfigEntry<float> LootBugRearUpDegrees;
+        internal static ConfigEntry<bool> LootBugSteals;
+        internal static ConfigEntry<bool> BrackenSteals;                       // a Bracken may carry off a hung victim
+        internal static ConfigEntry<float> BrackenNoticeMeters;
+        internal static ConfigEntry<float> BrackenStealChancePercent;
+        internal static ConfigEntry<float> BrackenStealDelaySeconds;
+        internal static ConfigEntry<float> BrackenReachMeters;
+        internal static ConfigEntry<float> BrackenGiveUpSeconds;
+        internal static ConfigEntry<float> BrackenStealExtraSeconds;
+        internal static ConfigEntry<bool> NoBlackoutOnBrackenKill;
+        internal static ConfigEntry<bool> ShowDeathTimer;
+        internal static ConfigEntry<float> BrackenScaredMeters;
         internal static ConfigEntry<bool> WrapOnCatch;                         // wrap the victim where they are caught, then drag
         internal static ConfigEntry<float> StuckSeconds;                        // spider standing still this long while carrying = stuck
         internal static ConfigEntry<float> CarryTimeoutSeconds;                // spider carrying this long without hanging = hang where it is
@@ -64,7 +78,7 @@ namespace SpiderCocoon
                 "How many seconds a victim stays hung up before they die.");
             ImmunitySeconds = Config.Bind(
                 "General", "ImmunitySeconds", 10f,
-                "Seconds after a release during which the spider cannot cocoon the player again.");
+                "Seconds after a release during which no monster (spider, Bracken, loot bug) can target the freed player.");
             DropHeldItems = Config.Bind(
                 "General", "DropHeldItems", true,
                 "Victims drop the items they are holding when they are caught.");
@@ -83,6 +97,48 @@ namespace SpiderCocoon
             WrapOnCatch = Config.Bind(
                 "General", "WrapOnCatch", true,
                 "The spider wraps the victim in silk straight away, where they were caught, and only then drags them to its lair. Turn off for the game's own order (drag first, wrap at the lair).");
+            BrackenStaysAfterChase = Config.Bind(
+                "Bracken", "StaysAfterChase", true,
+                "When a Bracken loses its chase target (its anger runs out) it normally retreats and hides for a while. With this on it goes straight back to stalking instead, so it keeps hanging around its prey.");
+            BrackenSteals = Config.Bind(
+                "Thieves", "BrackenSteals", true,
+                "A Bracken that notices a hung victim may cut them down and carry them off to its own lair. The victim stays wrapped and their death timer keeps running, so teammates can still cut them free wherever the Bracken drops them.");
+            BrackenNoticeMeters = Config.Bind(
+                "Thieves", "BrackenNoticeMeters", 25f,
+                "How close (in metres) a Bracken must be to a hung victim to notice them.");
+            BrackenStealChancePercent = Config.Bind(
+                "Thieves", "BrackenStealChancePercent", 50f,
+                "Chance (0 to 100) that a Bracken that notices a victim goes for them. It rolls once per victim.");
+            BrackenStealDelaySeconds = Config.Bind(
+                "Thieves", "BrackenStealDelaySeconds", 5f,
+                "How long (in seconds) a victim must have been hanging before a Bracken may take them. The Bracken waits next to the cocoon meanwhile, so the spider can finish hanging them first.");
+            ShowDeathTimer = Config.Bind(
+                "General", "ShowDeathTimer", true,
+                "Show a countdown to death: on the cocooned player's screen, and next to the 'cut them down' prompt for rescuers.");
+            LootBugSteals = Config.Bind(
+                "Thieves", "LootBugSteals", true,
+                "Loot bugs may also carry a hung victim off to their nest (they use the same notice, chance, delay and reach settings as the Bracken).");
+            LootBugCarryHeight = Config.Bind(
+                "Thieves", "LootBugCarryHeight", 2.2f,
+                "How high (in metres) above itself a loot bug holds a stolen cocoon, so it is not dragged along the floor.");
+            LootBugRearUpDegrees = Config.Bind(
+                "Thieves", "LootBugRearUpDegrees", 55f,
+                "How far (in degrees) a loot bug rears up on its back legs while holding a stolen cocoon overhead. 0 = stay on all fours. Use a negative number if it tips the wrong way.");
+            BrackenStealExtraSeconds = Config.Bind(
+                "Thieves", "BrackenStealExtraSeconds", 30f,
+                "Extra seconds added to the victim's death timer when a Bracken steals them, so the team has time to find and rescue them.");
+            NoBlackoutOnBrackenKill = Config.Bind(
+                "Bracken", "NoBlackoutOnBrackenKill", true,
+                "If true, the screen does not fade to black when a Bracken kills you (you still die and spectate normally).");
+            BrackenReachMeters = Config.Bind(
+                "Thieves", "BrackenReachMeters", 2f,
+                "How close (in metres, sideways) the Bracken has to get to the victim to take them.");
+            BrackenGiveUpSeconds = Config.Bind(
+                "Thieves", "BrackenGiveUpSeconds", 45f,
+                "A Bracken that has not reached the victim after this many seconds gives up.");
+            BrackenScaredMeters = Config.Bind(
+                "Thieves", "BrackenScaredMeters", 6f,
+                "A Bracken will not go for (or will give up on) a victim while another player is within this many metres of them.");
             StuckSeconds = Config.Bind(
                 "General", "StuckSeconds", 8f,
                 "If a spider stands still this many seconds while carrying a victim, it hangs them where it stands.");
@@ -159,6 +215,24 @@ namespace SpiderCocoon
             harmony.PatchAll();
             try
             {
+                // Webs ignore wrapped-up players: patch the web trigger's enter/stay/exit by name.
+                Type webTrigger = AccessTools.TypeByName("SandSpiderWebTrap");
+                if (webTrigger != null)
+                {
+                    foreach (string m in new[] { "OnTriggerStay" }) // the only place a web catches a player
+                    {
+                        System.Reflection.MethodBase mb = AccessTools.Method(webTrigger, m, new[] { typeof(Collider) });
+                        if (mb != null) harmony.Patch(mb, prefix: new HarmonyMethod(typeof(WebIgnorePatch), "Prefix"));
+                    }
+                }
+                else Log.LogWarning("Could not find the spider web class; webs may still catch a wrapped player's hidden body.");
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning("Web ignore patch failed: " + e.Message);
+            }
+            try
+            {
                 System.Reflection.MethodBase targetable = AccessTools.Method(typeof(EnemyAI), "PlayerIsTargetable");
                 if (targetable != null)
                 {
@@ -173,7 +247,7 @@ namespace SpiderCocoon
             {
                 Log.LogWarning("Could not patch PlayerIsTargetable: " + e.Message);
             }
-            Log.LogInfo("Hung to Dry 1.6.7 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
+            Log.LogInfo("Hung to Dry 1.7.0 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
         }
     }
 
@@ -198,8 +272,60 @@ namespace SpiderCocoon
             instance.StartCoroutine(routine);
         }
 
+        private static GUIStyle timerStyle;
+        private static GUIStyle shadowStyle;
+
+        private void OnGUI()
+        {
+            try
+            {
+                if (!Plugin.ShowDeathTimer.Value || Event.current.type != EventType.Repaint) return;
+                foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
+                {
+                    CocoonState s = kv.Value;
+                    if (!s.Hung || !Cocoon.IsLocal(s.Player)) continue;
+                    float left = Cocoon.SecondsLeft(s);
+                    if (timerStyle == null)
+                    {
+                        timerStyle = new GUIStyle(GUI.skin.label);
+                        timerStyle.alignment = TextAnchor.MiddleCenter;
+                        timerStyle.fontStyle = FontStyle.Bold;
+                        timerStyle.fontSize = 34;
+                        shadowStyle = new GUIStyle(timerStyle);
+                        shadowStyle.normal.textColor = Color.black;
+                    }
+                    timerStyle.normal.textColor = left <= 15f ? new Color(1f, 0.25f, 0.2f) : new Color(1f, 0.85f, 0.6f);
+                    Rect r = new Rect(0f, Screen.height * 0.08f, Screen.width, 60f);
+                    string text = "Time left: " + Cocoon.FormatTime(left);
+                    GUI.Label(new Rect(r.x + 2f, r.y + 2f, r.width, r.height), text, shadowStyle);
+                    GUI.Label(r, text, timerStyle);
+                    break;
+                }
+            }
+            catch (Exception) { }
+        }
+
+        private float nextGhostSync;
+
+        private void SyncGhosts()
+        {
+            if (Time.time < nextGhostSync) return;
+            nextGhostSync = Time.time + 0.5f;
+            foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
+            {
+                CocoonState s = kv.Value;
+                if (!s.Hung || s.Player == null || !Cocoon.IsLocal(s.Player) || s.Player.deadBody == null) continue;
+                Transform part = s.Player.deadBody.bodyParts != null && s.Player.deadBody.bodyParts.Length > 6 ? s.Player.deadBody.bodyParts[6].transform : null;
+                if (part == null) continue;
+                Vector3 a = s.Player.transform.position, b2 = part.position;
+                a.y = 0f; b2.y = 0f;
+                if (Vector3.Distance(a, b2) > 3f) Cocoon.MoveVictimUnderBody(s.Player);
+            }
+        }
+
         private void Update()
         {
+            SyncGhosts();
             // Emergency release: press F9 to free yourself if anything ever goes wrong.
             var keyboard = UnityEngine.InputSystem.Keyboard.current;
             if (keyboard != null && keyboard.f9Key.wasPressedThisFrame)
@@ -379,6 +505,12 @@ namespace SpiderCocoon
         public float LostSince = -1f;
         public Vector3 LastSpiderPos;
         public float StillSince = -1f;
+        public float HungAt;         // when the victim finished being hung up
+        public float ExtraSeconds;   // extra life granted by a Bracken steal
+        public FlowermanAI Thief;   // the Bracken carrying this victim off (null = nobody)
+        public HoarderBugAI BugThief; // the loot bug carrying this victim off (null = nobody)
+        public float BugCarryStart;
+        public Transform BugCarryPoint; // where a loot bug holds the cocoon (above its back)
         public bool NetWrapped;      // the stall net already made the spider wrap this victim
 
         // Camera (only used on the victim's own game)
@@ -399,6 +531,7 @@ namespace SpiderCocoon
 
         private static readonly Dictionary<int, CocoonState> Active = new Dictionary<int, CocoonState>();
         private static readonly Dictionary<int, float> ImmuneUntil = new Dictionary<int, float>();
+        internal static Dictionary<int, CocoonState> ActiveStates { get { return Active; } }
 
         // The spider keeps these private, so we reach them through reflection.
         private static readonly MethodInfo GrabBodyMethod = AccessTools.Method(typeof(SandSpiderAI), "GrabBody");
@@ -424,7 +557,7 @@ namespace SpiderCocoon
                 && Time.time < until;
         }
 
-        private static bool IsLocal(PlayerControllerB p)
+        internal static bool IsLocal(PlayerControllerB p)
         {
             return p != null && p == GameNetworkManager.Instance.localPlayerController;
         }
@@ -474,6 +607,7 @@ namespace SpiderCocoon
                     + (Time.time - lastImmuneUntil).ToString("F1") + "s ago (negative = they were still immune).");
             }
             bool isLocal = IsLocal(victim);
+            if (isLocal) WebIgnorePatch.LeaveAllWebs(victim); // webs often catch you just before the wrap
 
             try
             {
@@ -564,6 +698,7 @@ namespace SpiderCocoon
                 if (!match) continue;
 
                 s.Hung = true;
+                s.HungAt = Time.time;
                 CocoonRunner.Run(DeathAfter(kv.Key, s, Plugin.HangSeconds.Value));
                 Plugin.Log.LogInfo("Player " + kv.Key + " hung up. Death in " + Plugin.HangSeconds.Value + "s.");
                 break;
@@ -670,7 +805,13 @@ namespace SpiderCocoon
 
         private static IEnumerator DeathAfter(int id, CocoonState owner, float seconds)
         {
-            yield return new WaitForSeconds(seconds);
+            float start = Time.time;
+            while (Time.time < start + seconds + owner.ExtraSeconds)
+            {
+                yield return new WaitForSeconds(0.25f);
+                CocoonState alive;
+                if (!Active.TryGetValue(id, out alive) || alive != owner) yield break;
+            }
             // A timer from an earlier catch must never kill someone who was freed and caught again.
             CocoonState current;
             if (!Active.TryGetValue(id, out current) || current != owner) yield break;
@@ -794,6 +935,7 @@ namespace SpiderCocoon
                 {
                     MoveVictimUnderBody(p);
                 }
+                BrackenThief.ReleaseCarry(state, p.deadBody);
                 Transform hangPoint = p.deadBody.attachedTo;
                 UnityEngine.Object.Destroy(p.deadBody.gameObject);
                 p.deadBody = null;
@@ -906,18 +1048,33 @@ namespace SpiderCocoon
         }
 
         // The freed player's real body is wherever they were hit, so bring them to the cocoon.
-        private static void MoveVictimUnderBody(PlayerControllerB p)
+        internal static void MoveVictimUnderBody(PlayerControllerB p)
         {
             try
             {
                 Vector3 pos = p.deadBody.bodyParts[6].transform.position;
-                RaycastHit hit;
-                if (Physics.Raycast(pos, Vector3.down, out hit, 25f,
-                        StartOfRound.Instance.collidersAndRoomMask, QueryTriggerInteraction.Ignore))
+                // Land on the nearest AI node (the points the monsters themselves walk between): they are
+                // always on safe, walkable ground, unlike the floor under a carried cocoon (a pit, say).
+                GameObject[] nodes = RoundManager.Instance != null
+                    ? (p.isInsideFactory ? RoundManager.Instance.insideAINodes : RoundManager.Instance.outsideAINodes)
+                    : null;
+                GameObject bestNode = null;
+                float bestDist = float.MaxValue;
+                if (nodes != null)
                 {
-                    pos = hit.point + Vector3.up * 0.3f;
+                    foreach (GameObject n in nodes)
+                    {
+                        if (n == null) continue;
+                        float d = Vector3.Distance(n.transform.position, pos);
+                        if (d < bestDist) { bestDist = d; bestNode = n; }
+                    }
                 }
-                p.TeleportPlayer(pos);
+                if (bestNode == null)
+                {
+                    Plugin.Log.LogInfo("No AI node found near the cocoon; the hidden player stays where they are.");
+                    return;
+                }
+                p.TeleportPlayer(bestNode.transform.position + Vector3.up * 0.3f);
             }
             catch (Exception e)
             {
@@ -926,7 +1083,7 @@ namespace SpiderCocoon
         }
 
         // Removes the web line the body was hanging from.
-        private static void DestroyRope(Transform hangPoint)
+        internal static void DestroyRope(Transform hangPoint)
         {
             try
             {
@@ -1005,8 +1162,8 @@ namespace SpiderCocoon
             float need = Mathf.Max(0.5f, Plugin.CutDownSeconds.Value);
             int percent = Mathf.Min(100, Mathf.RoundToInt(cutProgress / need * 100f));
             me.cursorTip.text = held
-                ? "Cutting them down... " + percent + "%"
-                : "[Hold " + Plugin.CutDownKey.Value + "] Cut them down";
+                ? "Cutting them down... " + percent + "%" + TimeSuffix(target)
+                : "[Hold " + Plugin.CutDownKey.Value + "] Cut them down" + TimeSuffix(target);
             promptShown = true;
 
             if (cutProgress >= need)
@@ -1017,6 +1174,24 @@ namespace SpiderCocoon
                 Plugin.Log.LogInfo("Cutting down player " + target);
                 CocoonNet.RequestRelease(target);
             }
+        }
+
+        public static float SecondsLeft(CocoonState s)
+        {
+            return Mathf.Max(0f, s.HungAt + Plugin.HangSeconds.Value + s.ExtraSeconds - Time.time);
+        }
+
+        public static string FormatTime(float sec)
+        {
+            int n = Mathf.CeilToInt(sec);
+            return (n / 60) + ":" + (n % 60).ToString("00");
+        }
+
+        private static string TimeSuffix(int id)
+        {
+            CocoonState s;
+            if (!Plugin.ShowDeathTimer.Value || !Active.TryGetValue(id, out s) || !s.Hung) return "";
+            return " (" + FormatTime(SecondsLeft(s)) + " left)";
         }
 
         // Forget victims who really died (killed by us, or by anything else).
@@ -1188,6 +1363,8 @@ namespace SpiderCocoon
     {
         private const string RequestName = "SpiderCocoon.RequestRelease";
         private const string ReleaseName = "SpiderCocoon.Release";
+        private const string StealRequestName = "SpiderCocoon.RequestSteal";
+        private const string StealName = "SpiderCocoon.Steal";
 
         private static Unity.Netcode.CustomMessagingManager registeredWith;
         private static bool reportedFailure;
@@ -1209,6 +1386,8 @@ namespace SpiderCocoon
             {
                 mm.RegisterNamedMessageHandler(RequestName, OnRequest);
                 mm.RegisterNamedMessageHandler(ReleaseName, OnRelease);
+                mm.RegisterNamedMessageHandler(StealRequestName, OnStealRequest);
+                mm.RegisterNamedMessageHandler(StealName, OnSteal);
                 registeredWith = mm;
                 Plugin.Log.LogInfo("Hung to Dry network messages registered.");
             }
@@ -1236,6 +1415,70 @@ namespace SpiderCocoon
             {
                 writer.WriteByteSafe((byte)victimId);
                 nm.CustomMessagingManager.SendNamedMessage(RequestName, Unity.Netcode.NetworkManager.ServerClientId, writer);
+            }
+        }
+
+        // A Bracken's owner asks the host; the host tells everyone (including itself) that this Bracken takes this victim.
+        public static void RequestSteal(int victimId, ulong brackenNetworkId)
+        {
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm == null || !nm.IsListening || nm.CustomMessagingManager == null) return;
+            if (nm.IsServer)
+            {
+                BroadcastSteal(victimId, brackenNetworkId);
+                return;
+            }
+            using (Unity.Netcode.FastBufferWriter writer = new Unity.Netcode.FastBufferWriter(16, Unity.Collections.Allocator.Temp))
+            {
+                writer.WriteByteSafe((byte)victimId);
+                writer.WriteValueSafe(brackenNetworkId);
+                nm.CustomMessagingManager.SendNamedMessage(StealRequestName, Unity.Netcode.NetworkManager.ServerClientId, writer);
+            }
+        }
+
+        private static void BroadcastSteal(int victimId, ulong brackenNetworkId)
+        {
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            using (Unity.Netcode.FastBufferWriter writer = new Unity.Netcode.FastBufferWriter(16, Unity.Collections.Allocator.Temp))
+            {
+                writer.WriteByteSafe((byte)victimId);
+                writer.WriteValueSafe(brackenNetworkId);
+                nm.CustomMessagingManager.SendNamedMessageToAll(StealName, writer);
+            }
+            BrackenThief.ApplySteal(victimId, brackenNetworkId); // the host does not receive its own broadcast
+        }
+
+        private static void OnStealRequest(ulong senderClientId, Unity.Netcode.FastBufferReader reader)
+        {
+            try
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm == null || !nm.IsServer) return;
+                byte id;
+                ulong netId;
+                reader.ReadByteSafe(out id);
+                reader.ReadValueSafe(out netId);
+                BroadcastSteal(id, netId);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Steal request failed: " + e);
+            }
+        }
+
+        private static void OnSteal(ulong senderClientId, Unity.Netcode.FastBufferReader reader)
+        {
+            try
+            {
+                byte id;
+                ulong netId;
+                reader.ReadByteSafe(out id);
+                reader.ReadValueSafe(out netId);
+                BrackenThief.ApplySteal(id, netId);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Steal message failed: " + e);
             }
         }
 
@@ -1281,15 +1524,714 @@ namespace SpiderCocoon
         }
     }
 
+    // A Bracken that notices a hung victim may walk over, cut them down and carry them off to its lair.
+    // Only the Bracken's owner decides; the host then tells every game, which all do the same swap.
+    internal static class BrackenThief
+    {
+        private sealed class Lure
+        {
+            public int VictimId = -1;
+            public float Until;
+            public float NextCheck;
+            public HashSet<CocoonState> Rolled = new HashSet<CocoonState>(); // per catch, not per player slot
+            public bool LoggedRunning;
+            public float NextDistanceLog;
+            public int LastSkipReason = -1;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FlowermanAI, Lure> Lures
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<FlowermanAI, Lure>();
+
+        // A victim that is hung up, still on their rope, and not already taken.
+        internal static bool Available(CocoonState s, out DeadBodyInfo body)
+        {
+            body = null;
+            if (s == null || !s.Hung || s.Thief != null || s.BugThief != null || s.Player == null || s.Player.isPlayerDead) return false;
+            body = s.Player.deadBody;
+            return body != null && body.attachedTo != null && body.bodyParts != null && body.bodyParts.Length > 6;
+        }
+
+        // Any wrapped-up victim (still being dragged, or hung) that nobody has carried off yet. A Bracken keeps
+        // its eye on these, so it does not wander away the moment its prey becomes untargetable.
+        internal static bool Interesting(CocoonState s, out DeadBodyInfo body)
+        {
+            body = null;
+            if (s == null || s.Thief != null || s.BugThief != null || s.Player == null || s.Player.isPlayerDead) return false;
+            body = s.Player.deadBody;
+            return body != null && body.bodyParts != null && body.bodyParts.Length > 6;
+        }
+
+        internal static bool PlayerNear(Vector3 pos, PlayerControllerB except)
+        {
+            StartOfRound sor = StartOfRound.Instance;
+            if (sor == null) return false;
+            float r = Plugin.BrackenScaredMeters.Value;
+            foreach (PlayerControllerB p in sor.allPlayerScripts)
+            {
+                if (p == null || p == except || !p.isPlayerControlled || p.isPlayerDead || Cocoon.IsCocooned(p)) continue;
+                if (Vector3.Distance(p.transform.position, pos) < r) return true;
+            }
+            return false;
+        }
+
+        internal static Vector3 FloorUnder(DeadBodyInfo body)
+        {
+            Vector3 pos = body.bodyParts[6].transform.position;
+            RaycastHit hit;
+            if (Physics.Raycast(pos, Vector3.down, out hit, 25f, StartOfRound.Instance.collidersAndRoomMask, QueryTriggerInteraction.Ignore))
+                return hit.point;
+            return pos;
+        }
+
+        // Called every frame on every Bracken; only the owner does anything.
+        internal static void Tick(FlowermanAI b)
+        {
+            if (!Plugin.BrackenSteals.Value || b == null || !b.IsOwner) return;
+            Dictionary<int, CocoonState> active = Cocoon.ActiveStates;
+            if (active.Count == 0) { Lure none; if (Lures.TryGetValue(b, out none)) none.VictimId = -1; return; }
+
+            Lure l = Lures.GetOrCreateValue(b);
+            if (!l.LoggedRunning)
+            {
+                l.LoggedRunning = true;
+                Plugin.Log.LogInfo("Bracken steal logic is watching this Bracken (state " + b.currentBehaviourStateIndex + ").");
+            }
+            bool chasingSomeone = b.currentBehaviourStateIndex == 2 && b.targetPlayer != null && b.PlayerIsTargetable(b.targetPlayer);
+            if (b.isEnemyDead || b.inKillAnimation || b.carryingPlayerBody || chasingSomeone)
+            {
+                if (l.LastSkipReason != b.currentBehaviourStateIndex && Time.time >= l.NextDistanceLog)
+                {
+                    l.LastSkipReason = b.currentBehaviourStateIndex;
+                    l.NextDistanceLog = Time.time + 5f;
+                    Plugin.Log.LogInfo("Bracken is busy (state " + b.currentBehaviourStateIndex + ", carrying=" + b.carryingPlayerBody + ", killing=" + b.inKillAnimation + "), not looking for a cocoon.");
+                }
+                l.VictimId = -1;
+                return;
+            }
+            l.LastSkipReason = -1;
+
+            if (l.VictimId >= 0)
+            {
+                CocoonState s;
+                DeadBodyInfo body;
+                if (!active.TryGetValue(l.VictimId, out s) || !Interesting(s, out body) || Time.time > l.Until
+                    || PlayerNear(body.bodyParts[6].transform.position, null))
+                {
+                    Plugin.Log.LogInfo("Bracken gives up on the victim.");
+                    l.VictimId = -1;
+                    return;
+                }
+                Vector3 bp = body.bodyParts[6].transform.position;
+                Vector3 d = b.transform.position - bp;
+                d.y = 0f;
+                DeadBodyInfo hungBody;
+                if (Available(s, out hungBody) && Time.time - s.HungAt >= Plugin.BrackenStealDelaySeconds.Value && d.magnitude <= Plugin.BrackenReachMeters.Value && Mathf.Abs(b.transform.position.y - FloorUnder(body).y) < 2.5f)
+                {
+                    int id = l.VictimId;
+                    l.VictimId = -1;
+                    Plugin.Log.LogInfo("Bracken takes player " + id + "'s cocoon.");
+                    CocoonNet.RequestSteal(id, b.NetworkObjectId);
+                }
+                return;
+            }
+
+            if (Time.time < l.NextCheck) return;
+            l.NextCheck = Time.time + 0.5f;
+
+            int bestId = -1;
+            float best = Plugin.BrackenNoticeMeters.Value;
+            float nearestAny = float.MaxValue;
+            bool anyAvailable = false;
+            foreach (KeyValuePair<int, CocoonState> kv in active)
+            {
+                DeadBodyInfo body;
+                if (!Interesting(kv.Value, out body) || l.Rolled.Contains(kv.Value)) continue;
+                anyAvailable = true;
+                float dist = Vector3.Distance(b.transform.position, body.bodyParts[6].transform.position);
+                if (dist < nearestAny) nearestAny = dist;
+                if (dist < best) { best = dist; bestId = kv.Key; }
+            }
+            if (bestId < 0)
+            {
+                if (anyAvailable && Time.time >= l.NextDistanceLog)
+                {
+                    l.NextDistanceLog = Time.time + 5f;
+                    Plugin.Log.LogInfo("Bracken: a hung victim is " + nearestAny.ToString("F1") + " m away, outside its notice range of " + Plugin.BrackenNoticeMeters.Value.ToString("F0") + " m.");
+                }
+                return;
+            }
+
+            l.Rolled.Add(active[bestId]);
+            float roll = UnityEngine.Random.Range(0f, 100f);
+            if (roll >= Plugin.BrackenStealChancePercent.Value)
+            {
+                Plugin.Log.LogInfo("Bracken noticed a wrapped victim (" + best.ToString("F1") + " m) but passed: rolled " + roll.ToString("F0") + ", needed under " + Plugin.BrackenStealChancePercent.Value.ToString("F0") + ".");
+                return;
+            }
+            DeadBodyInfo chosen;
+            if (!Interesting(active[bestId], out chosen)) return;
+            if (PlayerNear(chosen.bodyParts[6].transform.position, null))
+            {
+                Plugin.Log.LogInfo("Bracken noticed a hung victim but another player is within " + Plugin.BrackenScaredMeters.Value.ToString("F0") + " m of them.");
+                return;
+            }
+            l.VictimId = bestId;
+            l.Until = Time.time + Mathf.Max(5f, Plugin.BrackenGiveUpSeconds.Value);
+            Plugin.Log.LogInfo("Bracken has noticed a wrapped victim (" + best.ToString("F1") + " m away) and is following them.");
+        }
+
+        // Runs after the Bracken's own AI step: point it at the victim.
+        static float nextCarryLog;
+        // While a Bracken carries a stolen cocoon, make sure it really walks away with it.
+        static void DriveCarry(FlowermanAI b)
+        {
+            bool mine = false;
+            foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
+            {
+                if (kv.Value.Thief != b) continue;
+                if (b.carryingPlayerBody) mine = true;
+                else kv.Value.Thief = null; // the game made the Bracken drop it: stop forcing its movement
+            }
+            if (!mine) return;
+            Vector3 goal = b.favoriteSpot != null ? b.favoriteSpot.position : b.transform.position;
+            if (b.favoriteSpot == null || Vector3.Distance(goal, b.transform.position) < 3f)
+            {
+                Transform far = b.ChooseFarthestNodeFromPosition(b.transform.position);
+                if (far != null) { b.favoriteSpot = far; goal = far.position; }
+            }
+            b.movingTowardsTargetPlayer = false;
+            b.moveTowardsDestination = true;
+            if (b.agent != null && b.agent.enabled && b.agent.isOnNavMesh)
+            {
+                b.agent.isStopped = false;
+                if (b.agent.speed < 4f) b.agent.speed = 4f;
+                b.agent.SetDestination(goal);
+                b.destination = goal;
+            }
+            if (Time.time >= nextCarryLog)
+            {
+                nextCarryLog = Time.time + 2f;
+                Plugin.Log.LogInfo("Bracken carry: speed=" + (b.agent != null ? b.agent.speed.ToString("0.0") : "?") +
+                    " onMesh=" + (b.agent != null && b.agent.isOnNavMesh) + " enabled=" + (b.agent != null && b.agent.enabled) +
+                    " pathPending=" + (b.agent != null && b.agent.pathPending) + " dist=" + Vector3.Distance(goal, b.transform.position).ToString("0.0") +
+                    " state=" + b.currentBehaviourStateIndex + " stunned=" + b.stunNormalizedTimer + " inKill=" + b.inKillAnimation);
+            }
+        }
+
+        internal static void Steer(FlowermanAI b)
+        {
+            if (b == null || !b.IsOwner) return;
+            DriveCarry(b);
+            Lure l;
+            if (!Lures.TryGetValue(b, out l) || l.VictimId < 0) return;
+            CocoonState s;
+            DeadBodyInfo body;
+            if (!Cocoon.ActiveStates.TryGetValue(l.VictimId, out s) || !Interesting(s, out body)) return;
+            Vector3 target = FloorUnder(body);
+            b.movingTowardsTargetPlayer = false;
+            if (!b.SetDestinationToPosition(target, true))
+            {
+                Plugin.Log.LogInfo("Bracken cannot reach the hung victim.");
+                l.VictimId = -1;
+                return;
+            }
+            if (b.agent != null && b.agent.enabled && b.agent.isOnNavMesh) b.agent.SetDestination(target);
+        }
+
+        // Runs on EVERY game: the Bracken takes the victim's body.
+        internal static void ApplySteal(int victimId, ulong brackenNetworkId)
+        {
+            try
+            {
+                CocoonState s;
+                if (!Cocoon.ActiveStates.TryGetValue(victimId, out s)) return;
+                DeadBodyInfo body;
+                if (!Available(s, out body)) return;
+
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                Unity.Netcode.NetworkObject no;
+                if (nm == null || nm.SpawnManager == null || !nm.SpawnManager.SpawnedObjects.TryGetValue(brackenNetworkId, out no)) return;
+                FlowermanAI b = no.GetComponent<FlowermanAI>();
+                if (b == null)
+                {
+                    LootBugThief.Apply(victimId, s, body, no.GetComponent<HoarderBugAI>());
+                    return;
+                }
+                if (b.isEnemyDead || b.carryingPlayerBody || b.rightHandGrip == null) return;
+
+                Transform hangPoint = body.attachedTo;
+                // The spider's hold left another body part frozen in place (kinematic). Free it and let the
+                // game set the body up again for the new holder, or the body stays where it hung.
+                for (int bp = 0; bp < body.bodyParts.Length; bp++)
+                {
+                    if (body.bodyParts[bp] == null) continue;
+                    body.bodyParts[bp].isKinematic = false;
+                    body.bodyParts[bp].freezeRotation = false;
+                }
+                HarmonyLib.AccessTools.Field(typeof(DeadBodyInfo), "wasMatchingPosition")?.SetValue(body, false);
+                body.attachedTo = b.rightHandGrip;
+                body.attachedLimb = body.bodyParts[0];
+                body.matchPositionExactly = true;
+                b.bodyBeingCarried = body;
+                b.carryingPlayerBody = true;
+                if (b.creatureAnimator != null) b.creatureAnimator.SetBool("carryingBody", true);
+                s.Thief = b;
+                s.ExtraSeconds += Plugin.BrackenStealExtraSeconds.Value;
+                if (hangPoint != null) Cocoon.DestroyRope(hangPoint);
+
+                if (b.IsOwner)
+                {
+                    if (b.favoriteSpot == null) b.favoriteSpot = b.ChooseClosestNodeToPosition(b.transform.position, true);
+                    b.SwitchToBehaviourState(1);
+                }
+                Plugin.Log.LogInfo("A Bracken carries player " + victimId + "'s cocoon away.");
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Bracken steal failed: " + e);
+            }
+        }
+
+        // The victim was freed (or the body is being removed): make sure no Bracken still holds it.
+        internal static void ReleaseCarry(CocoonState s, DeadBodyInfo body)
+        {
+            if (s != null && s.BugThief != null)
+            {
+                LootBugThief.Release(s, body);
+                return;
+            }
+            FlowermanAI b = s != null ? s.Thief : null;
+            if (s != null) s.Thief = null;
+            if (b == null) return;
+            try
+            {
+                if (b.bodyBeingCarried == body)
+                {
+                    b.carryingPlayerBody = false;
+                    b.bodyBeingCarried = null;
+                    if (b.creatureAnimator != null) b.creatureAnimator.SetBool("carryingBody", false);
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("Could not make the Bracken let go: " + e.Message);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(FlowermanAI), nameof(FlowermanAI.Update))]
+    internal static class BrackenStealUpdatePatch
+    {
+        private static void Postfix(FlowermanAI __instance)
+        {
+            try { BrackenThief.Tick(__instance); }
+            catch (Exception e) { Plugin.Log.LogWarning("Bracken steal check failed: " + e.Message); }
+        }
+    }
+
+    // When a Bracken's anger runs out the game sends it into "evade" (retreat). Send it straight back to
+    // stalking (state 0) instead, so it sticks around. Only the owner decides, like the game's own switch.
+    [HarmonyPatch(typeof(FlowermanAI), nameof(FlowermanAI.Update))]
+    internal static class BrackenStayPatch
+    {
+        private sealed class Track { public int Last = -1; }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FlowermanAI, Track> Tracks
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<FlowermanAI, Track>();
+
+        private static void Postfix(FlowermanAI __instance)
+        {
+            try
+            {
+                FlowermanAI b = __instance;
+                if (b == null) return;
+                Track t = Tracks.GetOrCreateValue(b);
+                int now = b.currentBehaviourStateIndex;
+                if (Plugin.BrackenStaysAfterChase.Value && b.IsOwner && !b.isEnemyDead
+                    && t.Last == 2 && now == 1 && !b.carryingPlayerBody && !b.inKillAnimation)
+                {
+                    b.SwitchToBehaviourState(0);
+                    b.evadeStealthTimer = 0f;
+                    now = b.currentBehaviourStateIndex;
+                    Plugin.Log.LogInfo("Bracken lost its target but stays around, stalking again.");
+                }
+                t.Last = now;
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("Bracken stay check failed: " + e.Message);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(FlowermanAI), nameof(FlowermanAI.DoAIInterval))]
+    internal static class BrackenStealAiPatch
+    {
+        private static void Postfix(FlowermanAI __instance)
+        {
+            try { BrackenThief.Steer(__instance); }
+            catch (Exception e) { Plugin.Log.LogWarning("Bracken steering failed: " + e.Message); }
+        }
+    }
+
+    // ---- Loot bugs: the same idea as the Bracken, but they carry the cocoon to their nest. ----
+    internal static class LootBugThief
+    {
+        private sealed class Lure
+        {
+            public int VictimId = -1;
+            public float Until;
+            public float NextCheck;
+            public HashSet<CocoonState> Rolled = new HashSet<CocoonState>();
+            public bool Logged;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<HoarderBugAI, Lure> Lures
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<HoarderBugAI, Lure>();
+
+        private static float nextLog;
+
+        private static bool Carrying(HoarderBugAI h, out CocoonState state)
+        {
+            state = null;
+            foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
+                if (kv.Value.BugThief == h) { state = kv.Value; return true; }
+            return false;
+        }
+
+        internal static void Tick(HoarderBugAI h)
+        {
+            if (!Plugin.LootBugSteals.Value || h == null || !h.IsOwner) return;
+            Dictionary<int, CocoonState> active = Cocoon.ActiveStates;
+            if (active.Count == 0) { Lure none; if (Lures.TryGetValue(h, out none)) none.VictimId = -1; return; }
+
+            Lure l = Lures.GetOrCreateValue(h);
+            if (!l.Logged)
+            {
+                l.Logged = true;
+                Plugin.Log.LogInfo("Loot bug steal logic is watching this loot bug (state " + h.currentBehaviourStateIndex + ").");
+            }
+            CocoonState carried;
+            if (h.isEnemyDead || h.currentBehaviourStateIndex == 2 || h.heldItem != null || Carrying(h, out carried))
+            {
+                l.VictimId = -1;
+                return;
+            }
+
+            if (l.VictimId >= 0)
+            {
+                CocoonState s;
+                DeadBodyInfo body;
+                if (!active.TryGetValue(l.VictimId, out s) || !BrackenThief.Interesting(s, out body) || Time.time > l.Until
+                    || BrackenThief.PlayerNear(body.bodyParts[6].transform.position, null))
+                {
+                    Plugin.Log.LogInfo("Loot bug gives up on the victim.");
+                    l.VictimId = -1;
+                    return;
+                }
+                Vector3 d = h.transform.position - body.bodyParts[6].transform.position;
+                d.y = 0f;
+                DeadBodyInfo hung;
+                if (BrackenThief.Available(s, out hung) && Time.time - s.HungAt >= Plugin.BrackenStealDelaySeconds.Value
+                    && d.magnitude <= Plugin.BrackenReachMeters.Value
+                    && Mathf.Abs(h.transform.position.y - BrackenThief.FloorUnder(body).y) < 2.5f)
+                {
+                    int id = l.VictimId;
+                    l.VictimId = -1;
+                    Plugin.Log.LogInfo("Loot bug takes player " + id + "'s cocoon.");
+                    CocoonNet.RequestSteal(id, h.NetworkObjectId);
+                }
+                return;
+            }
+
+            if (Time.time < l.NextCheck) return;
+            l.NextCheck = Time.time + 0.5f;
+
+            int bestId = -1;
+            float best = Plugin.BrackenNoticeMeters.Value;
+            foreach (KeyValuePair<int, CocoonState> kv in active)
+            {
+                DeadBodyInfo body;
+                if (!BrackenThief.Interesting(kv.Value, out body) || l.Rolled.Contains(kv.Value)) continue;
+                float dist = Vector3.Distance(h.transform.position, body.bodyParts[6].transform.position);
+                if (dist < best) { best = dist; bestId = kv.Key; }
+            }
+            if (bestId < 0) return;
+
+            l.Rolled.Add(active[bestId]);
+            float roll = UnityEngine.Random.Range(0f, 100f);
+            if (roll >= Plugin.BrackenStealChancePercent.Value)
+            {
+                Plugin.Log.LogInfo("Loot bug noticed a wrapped victim (" + best.ToString("F1") + " m) but passed: rolled " + roll.ToString("F0") + ".");
+                return;
+            }
+            DeadBodyInfo chosen;
+            if (!BrackenThief.Interesting(active[bestId], out chosen)) return;
+            if (BrackenThief.PlayerNear(chosen.bodyParts[6].transform.position, null)) return;
+            l.VictimId = bestId;
+            l.Until = Time.time + Mathf.Max(5f, Plugin.BrackenGiveUpSeconds.Value);
+            Plugin.Log.LogInfo("Loot bug has noticed a wrapped victim (" + best.ToString("F1") + " m away) and is following them.");
+        }
+
+        // After the bug's own AI step: head for the victim, or carry the victim to the nest.
+        internal static void Steer(HoarderBugAI h)
+        {
+            if (h == null || !h.IsOwner || h.isEnemyDead) return;
+
+            CocoonState carried;
+            if (Carrying(h, out carried))
+            {
+                DeadBodyInfo body = carried.Player != null ? carried.Player.deadBody : null;
+                if (h.currentBehaviourStateIndex == 2 || body == null || body.attachedTo != carried.BugCarryPoint)
+                {
+                    Plugin.Log.LogInfo("Loot bug lets go of the cocoon.");
+                    Release(carried, body);
+                    return;
+                }
+                if (h.nestPosition == Vector3.zero)
+                {
+                    Transform far = h.ChooseFarthestNodeFromPosition(h.transform.position);
+                    if (far != null) h.nestPosition = far.position;
+                }
+                Vector3 flat = h.transform.position - h.nestPosition;
+                flat.y = 0f;
+                if (flat.magnitude < 2f || Time.time - carried.BugCarryStart > 45f)
+                {
+                    Plugin.Log.LogInfo("Loot bug drops the cocoon at its nest.");
+                    Release(carried, body);
+                    return;
+                }
+                h.movingTowardsTargetPlayer = false;
+                if (h.agent != null && h.agent.enabled && h.agent.isOnNavMesh)
+                {
+                    h.agent.isStopped = false;
+                    if (h.agent.speed < 5f) h.agent.speed = 5f;
+                    h.agent.SetDestination(h.nestPosition);
+                    h.destination = h.nestPosition;
+                }
+                if (Time.time >= nextLog)
+                {
+                    nextLog = Time.time + 2f;
+                    Plugin.Log.LogInfo("Loot bug carry: dist to nest " + flat.magnitude.ToString("0.0") + " speed=" + h.agent.speed.ToString("0.0") + " state=" + h.currentBehaviourStateIndex);
+                }
+                return;
+            }
+
+            Lure l;
+            if (!Lures.TryGetValue(h, out l) || l.VictimId < 0) return;
+            CocoonState s;
+            DeadBodyInfo vb;
+            if (!Cocoon.ActiveStates.TryGetValue(l.VictimId, out s) || !BrackenThief.Interesting(s, out vb)) return;
+            Vector3 target = BrackenThief.FloorUnder(vb);
+            // The spider may still be dragging the body (nothing walkable there yet): keep trying until it
+            // is hung, and let the give-up timer decide, not a single failed path check.
+            if (!h.SetDestinationToPosition(target, true)) return;
+            if (h.agent != null && h.agent.enabled && h.agent.isOnNavMesh) h.agent.SetDestination(target);
+        }
+
+        // Runs on every game.
+        internal static void Apply(int victimId, CocoonState s, DeadBodyInfo body, HoarderBugAI h)
+        {
+            if (h == null || h.isEnemyDead || h.grabTarget == null || h.heldItem != null || !Plugin.LootBugSteals.Value) return;
+            Transform hangPoint = body.attachedTo;
+            for (int bp = 0; bp < body.bodyParts.Length; bp++)
+            {
+                if (body.bodyParts[bp] == null) continue;
+                body.bodyParts[bp].isKinematic = false;
+                body.bodyParts[bp].freezeRotation = false;
+            }
+            body.wasMatchingPosition = false;
+            // Hold the cocoon up above the bug (an empty point riding on its back), not down at its mouth.
+            GameObject point = new GameObject("CocoonCarryPoint");
+            point.transform.SetParent(h.transform, false);
+            // The bug's model may be scaled down: convert the height from real metres into its local units.
+            float yScale = Mathf.Max(0.01f, Mathf.Abs(h.transform.lossyScale.y));
+            point.transform.localPosition = new Vector3(0f, Plugin.LootBugCarryHeight.Value / yScale, 0f);
+            Plugin.Log.LogInfo("Loot bug carry point: scale " + yScale.ToString("0.00") + ", " + Plugin.LootBugCarryHeight.Value.ToString("0.0") + " m above the bug.");
+            s.BugCarryPoint = point.transform;
+            body.attachedTo = point.transform;
+            body.attachedLimb = body.bodyParts[0];
+            body.matchPositionExactly = true;
+            s.BugThief = h;
+            s.BugCarryStart = Time.time;
+            s.ExtraSeconds += Plugin.BrackenStealExtraSeconds.Value;
+            if (hangPoint != null) Cocoon.DestroyRope(hangPoint);
+            if (h.IsOwner)
+            {
+                if (h.nestPosition == Vector3.zero)
+                {
+                    Transform far = h.ChooseFarthestNodeFromPosition(h.transform.position);
+                    if (far != null) h.nestPosition = far.position;
+                }
+                h.SwitchToBehaviourState(1);
+            }
+            Plugin.Log.LogInfo("A loot bug carries player " + victimId + "'s cocoon away.");
+        }
+
+        internal static void Release(CocoonState s, DeadBodyInfo body)
+        {
+            HoarderBugAI h = s != null ? s.BugThief : null;
+            Transform point = s != null ? s.BugCarryPoint : null;
+            if (s != null) { s.BugThief = null; s.BugCarryPoint = null; }
+            if (h == null || body == null)
+            {
+                if (point != null) UnityEngine.Object.Destroy(point.gameObject);
+                return;
+            }
+            try
+            {
+                if (body.attachedTo == point)
+                {
+                    body.matchPositionExactly = false;
+                    body.attachedTo = null;
+                }
+                if (point != null) UnityEngine.Object.Destroy(point.gameObject);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("Could not make the loot bug let go: " + e.Message);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(HoarderBugAI), nameof(HoarderBugAI.Update))]
+    internal static class LootBugUpdatePatch
+    {
+        private static void Postfix(HoarderBugAI __instance)
+        {
+            try { LootBugThief.Tick(__instance); }
+            catch (Exception e) { Plugin.Log.LogWarning("Loot bug steal check failed: " + e.Message); }
+        }
+    }
+
+    [HarmonyPatch(typeof(HoarderBugAI), nameof(HoarderBugAI.DoAIInterval))]
+    internal static class LootBugAiPatch
+    {
+        private static void Postfix(HoarderBugAI __instance)
+        {
+            try { LootBugThief.Steer(__instance); }
+            catch (Exception e) { Plugin.Log.LogWarning("Loot bug steering failed: " + e.Message); }
+        }
+    }
+
+    // The bug only raises its arms for a real item; do it for a carried cocoon too, and rear it up on
+    // its back legs so it looks like it is holding the cocoon over its head.
+    [HarmonyPatch(typeof(HoarderBugAI), "LateUpdate")]
+    internal static class LootBugArmsPatch
+    {
+        private static readonly HashSet<HoarderBugAI> Tilted = new HashSet<HoarderBugAI>();
+
+        private static void Postfix(HoarderBugAI __instance)
+        {
+            try
+            {
+                HoarderBugAI h = __instance;
+                if (h == null || h.creatureAnimator == null || h.animationContainer == null) return;
+                bool carrying = false;
+                foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
+                    if (kv.Value.BugThief == h) { carrying = true; break; }
+
+                if (carrying)
+                {
+                    h.creatureAnimator.SetLayerWeight(1, 1f);
+                    Tilted.Add(h);
+                    Quaternion want = Quaternion.Euler(-Plugin.LootBugRearUpDegrees.Value, 0f, 0f);
+                    h.animationContainer.localRotation = Quaternion.Slerp(h.animationContainer.localRotation, want, 6f * Time.deltaTime);
+                }
+                else if (Tilted.Contains(h))
+                {
+                    h.animationContainer.localRotation = Quaternion.Slerp(h.animationContainer.localRotation, Quaternion.identity, 6f * Time.deltaTime);
+                    if (Quaternion.Angle(h.animationContainer.localRotation, Quaternion.identity) < 1f)
+                    {
+                        h.animationContainer.localRotation = Quaternion.identity;
+                        Tilted.Remove(h);
+                    }
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
     // The game shows a player's floating name badge whenever you look at their body. A wrapped-up
     // player's real (invisible) body is still standing where they were caught, so stop the badge
     // being shown at the source instead of trying to hide it afterwards.
+    // No fade-to-black when a Bracken's neck snap kills the local player.
+    [HarmonyPatch(typeof(PlayerControllerB), nameof(PlayerControllerB.KillPlayer))]
+    internal static class NoBlackoutPatch
+    {
+        static void Postfix(PlayerControllerB __instance, CauseOfDeath causeOfDeath)
+        {
+            try
+            {
+                if (!Plugin.NoBlackoutOnBrackenKill.Value || causeOfDeath != CauseOfDeath.Strangulation) return;
+                if (GameNetworkManager.Instance == null || __instance != GameNetworkManager.Instance.localPlayerController) return;
+                if (HUDManager.Instance != null && HUDManager.Instance.gameOverAnimator != null)
+                    HUDManager.Instance.gameOverAnimator.ResetTrigger("gameOver");
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("No-blackout patch: " + e.Message); }
+        }
+    }
+
     [HarmonyPatch(typeof(PlayerControllerB), nameof(PlayerControllerB.ShowNameBillboard))]
     internal static class NameBadgePatch
     {
         private static bool Prefix(PlayerControllerB __instance)
         {
             return !Cocoon.IsCocooned(__instance);
+        }
+    }
+
+    internal static class WebIgnorePatch
+    {
+        // Make a player let go of every spider web they are stuck in (they were caught in one just before
+        // being wrapped). Webs only ever hold the local player, so this runs on the victim's own game.
+        internal static void LeaveAllWebs(PlayerControllerB victim)
+        {
+            try
+            {
+                System.Reflection.MethodInfo leave = AccessTools.Method(typeof(SandSpiderWebTrap), "PlayerLeaveWeb");
+                System.Reflection.FieldInfo hindering = AccessTools.Field(typeof(SandSpiderWebTrap), "hinderingLocalPlayer");
+                foreach (SandSpiderWebTrap web in UnityEngine.Object.FindObjectsOfType<SandSpiderWebTrap>())
+                {
+                    if (web == null) continue;
+                    if (leave != null && hindering != null && (bool)hindering.GetValue(web)) leave.Invoke(web, new object[] { victim });
+                    else if (web.currentTrappedPlayer == victim) web.currentTrappedPlayer = null;
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("Could not free the victim from webs: " + e.Message);
+            }
+        }
+
+        // Returns false (skip the game's code) when the thing touching the web is a wrapped-up player's
+        // hidden body, so it cannot trip, slow down or alert the spider.
+        private static bool Prefix(Collider other)
+        {
+            try
+            {
+                if (other == null) return true;
+                PlayerControllerB p = other.GetComponentInParent<PlayerControllerB>();
+                if (p != null && Cocoon.IsCocooned(p)) return false;
+            }
+            catch (Exception) { }
+            return true;
+        }
+    }
+
+    // The spider is also told about a tripped web over the network; ignore that for wrapped players too.
+    [HarmonyPatch(typeof(SandSpiderAI), "PlayerTripWebClientRpc")]
+    internal static class WebTripRpcPatch
+    {
+        private static bool Prefix(int playerNum)
+        {
+            try
+            {
+                StartOfRound sor = StartOfRound.Instance;
+                if (sor != null && playerNum >= 0 && playerNum < sor.allPlayerScripts.Length && Cocoon.IsCocooned(sor.allPlayerScripts[playerNum])) return false;
+            }
+            catch (Exception) { }
+            return true;
         }
     }
 
@@ -1303,12 +2245,15 @@ namespace SpiderCocoon
         {
             try
             {
-                if (__result && __instance is SandSpiderAI && __args != null && __args.Length > 0)
+                if (__result && __args != null && __args.Length > 0)
                 {
                     PlayerControllerB player = __args[0] as PlayerControllerB;
-                    // Wrapped-up players, and freed players during their immunity, are invisible to the spider's
-                    // AI. Otherwise it hovers next to a freed player and re-catches them the moment it ends.
-                    if (Cocoon.IsCocooned(player) || Cocoon.IsImmune(player)) __result = false;
+                    // A wrapped-up player's real (invisible) body is still standing where they were caught.
+                    // No monster may target it or collide with it (a Bracken would otherwise strangle it).
+                    if (Cocoon.IsCocooned(player)) __result = false;
+                    // Freed players are invisible to every monster's AI during their immunity (spider, Bracken,
+                    // loot bug...). Otherwise a monster waiting next to the cocoon gets them the moment they drop.
+                    else if (Cocoon.IsImmune(player)) __result = false;
                 }
             }
             catch (Exception)
