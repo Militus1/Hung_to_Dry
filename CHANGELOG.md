@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.7
+- The spider now wraps a victim in silk right where they are caught, then drags them off, instead of dragging first.
+- The stall safety net wraps a victim before hanging them, and triggers after 8 seconds instead of 12.
+- New setting `WrapOnCatch`. Delete your old config file to pick up the new defaults.
+
 ## 1.6.6
 - Chase boost: the spider speeds up as it closes in, only while it has line of sight. Acceleration and turning scale with the boost so it no longer loses speed at corners.
 - Web alert: stepping in a web sends the spider sprinting to it, faster the further away it is.

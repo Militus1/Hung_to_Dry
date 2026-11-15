@@ -1,11 +1,5 @@
 # Hung to Dry
 
-![icon](icon.png)
-
-A **Lethal Company** mod (BepInEx) that changes the Bunker Spider: instead of killing you outright it paralyses you, wraps you in silk, drags you back to its lair and hangs you from the ceiling.
-
-[Thunderstore page](https://thunderstore.io/c/lethal-company/p/Militus/Hung_to_Dry/)
-
 Bunker spiders no longer kill outright. They paralyse you, wrap you in silk, drag you to their lair and hang you from the ceiling. Hold a key to cut a teammate down before the timer runs out.
 
 The Bunker Spider's bite no longer kills. Instead, you're paralysed, wrapped in web and carried back to the spider's lair, where you're hung from the ceiling in a cocoon. You watch it all happen from a camera you can turn with the mouse. If nobody frees you before the timer runs out, you die in the cocoon.
@@ -43,7 +37,8 @@ The settings file is `BepInEx/config/Militus.HungToDry.cfg`. It appears after th
 | `VictimHoldSeconds` | 60 | Safety net: if the spider never hangs the victim, they are released after this long |
 | `CarryTimeoutSeconds` | 30 | A spider carrying a victim this long without hanging them hangs them where it is (0 = off) |
 | `WallReachMeters` | 0.8 | How close the spider must get to its wall spot before it hangs a victim (the game wants 0.1) |
-| `StuckSeconds` | 12 | A spider standing still this long while carrying someone hangs them where it stands |
+| `WrapOnCatch` | true | The spider wraps the victim where they were caught, then drags them to its lair (false = the game's own order) |
+| `StuckSeconds` | 8 | A spider standing still this long while carrying someone wraps (if needed) and hangs them where it stands |
 | `DropHeldItems` | true | Victims drop what they are holding when caught |
 | `LookSensitivity` | 0.12 | Mouse speed for the cocoon camera |
 | `ChaseBoostEnabled` | true | Spider speeds up as it closes in, only with line of sight |
@@ -88,15 +83,3 @@ The log contains your player name and some file paths, but no passwords. Say whi
 ## Credits
 
 Made by Militus.
-
-## Building from source
-
-1. Install the .NET SDK.
-2. Open `SpiderCocoon.csproj` and set `GameDir` (your Lethal Company folder) and `BepInExCore` (your mod profile's `BepInEx\core` folder).
-3. Run `dotnet build`. The result is `bin/Debug/netstandard2.1/HungToDry.dll`; put it in your profile's `BepInEx/plugins` folder.
-
-All the code is in `Plugin.cs`.
-
-## Licence
-
-MIT. See [LICENSE](LICENSE).

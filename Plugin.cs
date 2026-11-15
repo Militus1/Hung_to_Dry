@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace SpiderCocoon
 {
-    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.6.6")]
+    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.6.7")]
     public class Plugin : BaseUnityPlugin
     {
         internal static ManualLogSource Log;
@@ -21,6 +21,7 @@ namespace SpiderCocoon
         internal static ConfigEntry<float> HangSeconds;      // time between being hung up and dying
         internal static ConfigEntry<float> ImmunitySeconds;  // only used if a victim is released
         internal static ConfigEntry<UnityEngine.InputSystem.Key> CutDownKey;   // hold this near a hung cocoon to rescue
+        internal static ConfigEntry<bool> WrapOnCatch;                         // wrap the victim where they are caught, then drag
         internal static ConfigEntry<float> StuckSeconds;                        // spider standing still this long while carrying = stuck
         internal static ConfigEntry<float> CarryTimeoutSeconds;                // spider carrying this long without hanging = hang where it is
         internal static ConfigEntry<float> WallReachMeters;                    // how close to its wall spot the spider must get before it hangs a victim
@@ -79,8 +80,11 @@ namespace SpiderCocoon
             WallReachMeters = Config.Bind(
                 "General", "WallReachMeters", 0.8f,
                 "How close (in metres) the spider has to get to its hanging spot on the wall before it hangs a victim. The game wants 0.1, which a spider that bumps into a wall or grate may never reach. 0 uses the game's own value.");
+            WrapOnCatch = Config.Bind(
+                "General", "WrapOnCatch", true,
+                "The spider wraps the victim in silk straight away, where they were caught, and only then drags them to its lair. Turn off for the game's own order (drag first, wrap at the lair).");
             StuckSeconds = Config.Bind(
-                "General", "StuckSeconds", 12f,
+                "General", "StuckSeconds", 8f,
                 "If a spider stands still this many seconds while carrying a victim, it hangs them where it stands.");
 
             ChaseBoostEnabled = Config.Bind(
@@ -169,7 +173,7 @@ namespace SpiderCocoon
             {
                 Log.LogWarning("Could not patch PlayerIsTargetable: " + e.Message);
             }
-            Log.LogInfo("Hung to Dry 1.6.6 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
+            Log.LogInfo("Hung to Dry 1.6.7 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
         }
     }
 
@@ -375,6 +379,7 @@ namespace SpiderCocoon
         public float LostSince = -1f;
         public Vector3 LastSpiderPos;
         public float StillSince = -1f;
+        public bool NetWrapped;      // the stall net already made the spider wrap this victim
 
         // Camera (only used on the victim's own game)
         public bool CameraActive;
@@ -448,6 +453,7 @@ namespace SpiderCocoon
             spider.targetPlayer = null; // the frozen player is not a chase target any more
             spider.SwitchToBehaviourState(1);
             Plugin.Log.LogInfo("Spider grabbed player " + victim.playerClientId + "'s stand-in body.");
+            if (Plugin.WrapOnCatch.Value) StartWrap(spider, "at the catch");
         }
 
         // Runs on EVERY player's game when a spider hit lands.
@@ -565,6 +571,25 @@ namespace SpiderCocoon
         }
 
         private static readonly MethodInfo WrapMethod = AccessTools.Method(typeof(SandSpiderAI), "turnBodyIntoWeb");
+
+        // Starts the spider's own wrapping routine now (it normally only does this once it is home)
+        // and tells the other games to do the same. The game freezes the spider while it wraps.
+        private static void StartWrap(SandSpiderAI spider, string why)
+        {
+            try
+            {
+                if ((bool)SpooledField.GetValue(spider) || (bool)SpoolingField.GetValue(spider)) return;
+                if (CoroutineField.GetValue(spider) != null) return;
+                if (HeldBodyField.GetValue(spider) == null) return;
+                CoroutineField.SetValue(spider, spider.StartCoroutine((IEnumerator)WrapMethod.Invoke(spider, null)));
+                spider.SpiderTurnBodyIntoWebServerRpc();
+                Plugin.Log.LogInfo("Spider wraps the victim " + why + ".");
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("Starting the wrap failed: " + e);
+            }
+        }
 
         private static bool SpiderHoldsBody(SandSpiderAI spider)
         {
@@ -845,6 +870,15 @@ namespace SpiderCocoon
                 bool stuckStill = Time.time - s.StillSince >= Plugin.StuckSeconds.Value;
                 bool carriedTooLong = Plugin.CarryTimeoutSeconds.Value > 0f && Time.time - s.BeganAt >= Plugin.CarryTimeoutSeconds.Value;
                 if (!stuckStill && !carriedTooLong) continue;
+
+                // Stalled before it ever wrapped the victim: wrap first, then hang (the wrap counts as busy).
+                if (!s.NetWrapped && !(bool)SpooledField.GetValue(spider))
+                {
+                    s.NetWrapped = true;
+                    s.StillSince = Time.time;
+                    StartWrap(spider, "because it stalled");
+                    continue;
+                }
 
                 Plugin.Log.LogWarning((stuckStill ? "Spider stuck" : "Spider carrying too long") + " with player " + s.Player.playerClientId + ": hanging them where it stands.");
                 s.StillSince = -1f;
