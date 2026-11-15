@@ -70,6 +70,16 @@ The settings file is `BepInEx/config/Militus.HungToDry.cfg`. It appears after th
 
 If anything ever goes wrong, press **F9** to free yourself. This frees you for everyone in the game.
 
+## Reporting bugs
+
+Found a problem? Please [open an issue on GitHub](https://github.com/Militus1/Hung_to_Dry/issues/new/choose) and include your log file.
+
+1. Play until the problem happens, then close the game.
+2. In r2modman go to **Settings, then Browse profile folder**, and open `BepInEx/LogOutput.log`.
+3. Drag that file into the issue, or paste it at [mclo.gs](https://mclo.gs) and share the link. Do not paste it into chat.
+
+The log contains your player name and some file paths, but no passwords. Say which mod version you have and whether you were the host or a client, because the host's game decides how the spider behaves.
+
 ## Known quirks
 
 - Mods that make you untargetable (for example debug tools) will stop the spider catching you, as you'd expect.
