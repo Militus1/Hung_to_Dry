@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>HungToDry</AssemblyName>
+    <RootNamespace>SpiderCocoon</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <!-- ============ EDIT THESE TWO LINES ============ -->
+  <PropertyGroup>
+    <!-- Your Lethal Company folder (Steam > right-click game > Manage > Browse local files) -->
+    <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Lethal Company</GameDir>
+    <!-- Your r2modman profile's BepInEx\core folder (r2modman > Settings > Browse profile folder, then open BepInEx\core) -->
+    <BepInExCore>$(APPDATA)\r2modmanPlus-local\LethalCompany\profiles\Default\BepInEx\core</BepInExCore>
+  </PropertyGroup>
+  <!-- ============================================== -->
+
+  <ItemGroup>
+    <!-- BepInEx and Harmony (from your mod profile) -->
+    <Reference Include="$(BepInExCore)\BepInEx.dll" Private="false" />
+    <Reference Include="$(BepInExCore)\0Harmony.dll" Private="false" />
+
+    <!-- The game's own code and the Unity / Netcode libraries it uses -->
+    <Reference Include="$(GameDir)\Lethal Company_Data\Managed\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="$(GameDir)\Lethal Company_Data\Managed\UnityEngine*.dll" Private="false" />
+    <Reference Include="$(GameDir)\Lethal Company_Data\Managed\Unity.*.dll" Private="false" />
+  </ItemGroup>
+
+</Project>
