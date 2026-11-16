@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.1
+- **Fix:** a player who dies in a cocoon now leaves an ordinary body that teammates can pick up and carry back, instead of an unpickable one.
+- **Fix:** the Bracken no longer runs back and forth with a cocoon. It carries it to its lair and puts it down there; nobody steals it again afterwards. Rescue time is no longer wasted.
+- **Fix:** snare fleas and thumpers now ignore a wrapped player, including one being carried by a Bracken or loot bug.
+- New experimental setting `SpiderFootstepVolume` (default 1 = unchanged). It may not take effect on every spider.
+- Extra diagnostics appear in the log only when `DebugLogging` is on.
+
 ## 1.8.0
 - **Pecking order:** only one thief goes for a cocoon at a time, and the Bracken outranks the loot bug. A loot bug that sees a Bracken heading for the cocoon backs off and lets it through (`LootBugYield`, `LootBugYieldMeters`).
 - **Bracken ambush:** a Bracken that notices a victim being hung now hides out of sight and waits. It only comes out once the spider has hung the cocoon and gone invisible (`BrackenAmbush`, `BrackenAmbushMinMeters`, `BrackenAmbushMaxMeters`, `BrackenAmbushMaxWaitSeconds`). If the spider is still about after `BrackenAmbushPatienceSeconds` (12 s), it comes out anyway, so it never hides until the victim dies.

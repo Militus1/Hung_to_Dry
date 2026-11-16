@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace SpiderCocoon
 {
-    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.8.0")]
+    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.8.1")]
     public class Plugin : BaseUnityPlugin
     {
         internal static ManualLogSource Log;
@@ -95,6 +95,7 @@ namespace SpiderCocoon
         internal static ConfigEntry<UnityEngine.InputSystem.Key> DebugClearEnemiesKey; // testing only
         internal static ConfigEntry<UnityEngine.InputSystem.Key> DebugDumpBonesKey; // testing only
         internal static ConfigEntry<bool> DebugLogging;
+        internal static ConfigEntry<float> SpiderFootstepVolume;
 
         private void Awake()
         {
@@ -313,6 +314,10 @@ namespace SpiderCocoon
             DebugClearEnemiesKey = Config.Bind(
                 "Testing", "DebugClearEnemiesKey", UnityEngine.InputSystem.Key.F11,
                 "The key that removes every enemy from the level (host only, needs EnableDebugSpawnKey). Anyone hung up is freed first.");
+            SpiderFootstepVolume = Config.Bind(
+                "General", "SpiderFootstepVolume", 1f,
+                new ConfigDescription("How loud the bunker spider's footsteps are, as a fraction of the game's normal volume. 1 = unchanged, 0.5 = half, 0 = silent. Experimental: may not take effect on every spider. Only changes what you hear on your own game.",
+                    new AcceptableValueRange<float>(0f, 1f)));
             DebugLogging = Config.Bind(
                 "Testing", "DebugLogging", false,
                 "Writes extra, repetitive detail to the log (carry progress, notice-range checks, back-off messages). Leave off unless you are chasing a problem.");
@@ -357,7 +362,46 @@ namespace SpiderCocoon
             {
                 Log.LogWarning("Could not patch PlayerIsTargetable: " + e.Message);
             }
-            Log.LogInfo("Hung to Dry 1.8.0 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
+            try
+            {
+                // Spider footsteps that the game plays as one-shot sounds: turn those down as well.
+                System.Reflection.MethodBase oneShot = AccessTools.Method(typeof(AudioSource), "PlayOneShot", new Type[] { typeof(AudioClip), typeof(float) });
+                if (oneShot != null) harmony.Patch(oneShot, prefix: new HarmonyMethod(typeof(SpiderStepSoundPatch), "Prefix"));
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning("Could not patch the spider step sounds: " + e.Message);
+            }
+            try
+            {
+                // Snare fleas, thumpers and anything else that picks a player by sight or distance must skip a
+                // wrapped-up player's hidden body, exactly as the spider already does.
+                foreach (string name in new string[] { "GetClosestPlayer", "CheckLineOfSightForPlayer", "CheckLineOfSightForClosestPlayer" })
+                {
+                    foreach (System.Reflection.MethodInfo mi in typeof(EnemyAI).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
+                    {
+                        if (mi.Name != name || mi.ReturnType != typeof(PlayerControllerB)) continue;
+                        harmony.Patch(mi, postfix: new HarmonyMethod(typeof(EnemyPickPlayerPatch), "Postfix"));
+                        Log.LogInfo("Patched EnemyAI." + name + " so monsters skip wrapped players.");
+                    }
+                }
+                HashSet<System.Reflection.MethodBase> patchedTargets = new HashSet<System.Reflection.MethodBase>();
+                foreach (Type t in new Type[] { typeof(CentipedeAI), typeof(CrawlerAI) })
+                {
+                    foreach (string mn in new string[] { "Update", "DoAIInterval" })
+                    {
+                        System.Reflection.MethodInfo m = AccessTools.Method(t, mn);
+                        if (m == null || !patchedTargets.Add(m)) continue;
+                        harmony.Patch(m, postfix: new HarmonyMethod(typeof(EnemyDropTargetPatch), "Postfix"));
+                        if (t == typeof(CentipedeAI) && mn == "Update") harmony.Patch(m, prefix: new HarmonyMethod(typeof(EnemyDropTargetPatch), "Prefix"));
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning("Could not patch monster targeting: " + e.Message);
+            }
+            Log.LogInfo("Hung to Dry 1.8.1 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
         }
     }
 
@@ -457,6 +501,8 @@ namespace SpiderCocoon
                 if (bonesKey != null && bonesKey.wasPressedThisFrame) DebugSpawn.DumpBrackenBones();
             }
             Cocoon.RemoveDeadVictims();
+            Cocoon.TickCorpseDump();
+            Cocoon.TickStandIns();
             CocoonNet.EnsureRegistered();
             Cocoon.WatchSpiders();
         }
@@ -699,6 +745,8 @@ namespace SpiderCocoon
         public List<bool> ColliderWasEnabled = new List<bool>();
 
         public bool Hung;
+        public float StandInDeadline;
+        public DeadBodyInfo StandIn; // the hanging stand-in body
 
         // Used to notice a spider that has stopped moving while carrying this victim.
         public float BeganAt;
@@ -711,6 +759,7 @@ namespace SpiderCocoon
         public FlowermanAI Thief;   // the Bracken carrying this victim off (null = nobody)
         public HoarderBugAI BugThief; // the loot bug carrying this victim off (null = nobody)
         public bool WasStolen;       // a Bracken or loot bug has carried this victim off at least once
+        public bool BrackenDropped;  // a Bracken carried this victim to its lair and put them down: it will not pick them up again
         public EnemyAI Claim;        // the thief that has first call on this victim (null = nobody)
         public int ClaimRank;        // pecking order: Bracken 2 outranks loot bug 1
         public Transform BrackenDragPoint; // where a Bracken drags the cocoon (an empty point behind it)
@@ -868,6 +917,7 @@ namespace SpiderCocoon
                 // 4. Create the stand-in ragdoll the spider will carry.
                 //    This is the same call the game makes when a player dies, minus the dying.
                 victim.SpawnDeadBody(id, Vector3.zero, (int)CauseOfDeath.Mauling, victim, 0);
+                state.StandIn = victim.deadBody;
 
                 // 5. Hand the body to the spider (only does anything on the spider owner's game).
                 MakeSpiderGrab(spider, victim);
@@ -1047,7 +1097,28 @@ namespace SpiderCocoon
             Plugin.Log.LogInfo("Player " + id + " dies in the cocoon.");
 
             // spawnBody: false. The hanging stand-in body is the corpse, so no second body appears.
-            p.KillPlayer(Vector3.zero, false, CauseOfDeath.Mauling, 0);
+            // Die the normal way WITH a body: the game then makes an ordinary pick-up-able corpse. First the
+            // hanging stand-in is removed and the player's body is moved to where it hung, so the real corpse
+            // appears there.
+            bool normalBody = false;
+            try
+            {
+                DeadBodyInfo standIn = state.StandIn != null ? state.StandIn : p.deadBody;
+                if (standIn != null && standIn.bodyParts != null && standIn.bodyParts.Length > 5)
+                {
+                    Vector3 hip = standIn.bodyParts[5].transform.position;
+                    BrackenThief.ReleaseCarry(state, standIn);
+                    standIn.attachedTo = null; standIn.attachedLimb = null; standIn.matchPositionExactly = false;
+                    p.thisPlayerBody.position = hip - Vector3.up * 1.32f;
+                    p.transform.position = p.thisPlayerBody.position;
+                    UnityEngine.Object.Destroy(standIn.gameObject);
+                    if (p.deadBody == standIn) p.deadBody = null;
+                    normalBody = true;
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Could not swap the stand-in for a normal body: " + e.Message); }
+            p.KillPlayer(Vector3.zero, normalBody, CauseOfDeath.Mauling, 0);
+            if (p.isPlayerDead && !normalBody) EnsureCorpseGrabbable(state); // does nothing unless this game is the host
 
             // If something blocked the death (Imperium's god mode, the game's "allow death" switch, another mod),
             // the player is still alive but our camera is already off: they would walk around seeing nothing.
@@ -1426,8 +1497,211 @@ namespace SpiderCocoon
                 if (s.Player == null || s.Player.isPlayerDead)
                 {
                     StopCamera(s, false);
+                    // If a thief was still carrying them, let go: otherwise the corpse stays glued to the thief
+                    // and nobody can pick it up.
+                    try
+                    {
+                        if (s.Thief != null || s.BugThief != null || s.BrackenDragPoint != null || s.BugCarryPoint != null)
+                        {
+                            Plugin.Log.LogInfo("Player " + id + " died while carried: setting the body down.");
+                            BrackenThief.ReleaseCarry(s, s.StandIn != null ? s.StandIn : (s.Player != null ? s.Player.deadBody : null));
+                        }
+                    }
+                    catch (Exception e) { Plugin.Log.LogWarning("Could not set the body down: " + e.Message); }
+                    bool replaced = false;
+                    try
+                    {
+                        // The game made a normal body: the hanging stand-in is no longer needed.
+                        if (s.StandIn != null && s.Player != null && s.Player.deadBody != s.StandIn && s.Player.deadBody != null)
+                        {
+                            UnityEngine.Object.Destroy(s.StandIn.gameObject);
+                            replaced = true;
+                        }
+                    }
+                    catch (Exception e) { Plugin.Log.LogWarning("Could not remove the stand-in body: " + e.Message); }
+                    if (!replaced && s.StandIn != null && s.Player != null)
+                    {
+                        PendingStandIns.Add(s);
+                        s.StandInDeadline = Time.time + 4f;
+                    }
+                    if (!replaced && s.StandIn != null) { if (Plugin.DebugLogging.Value) corpseDumpAt = Time.time + 6f; Active.Remove(id); continue; }
+                    try
+                    {
+                        DeadBodyInfo db = (!replaced && s.Player != null) ? s.Player.deadBody : null;
+                        if (db != null)
+                        {
+                            db.canBeGrabbedBackByPlayers = true;
+                            if (db.attachedTo != null && db.grabBodyObject == null) { db.attachedTo = null; db.attachedLimb = null; db.matchPositionExactly = false; }
+                            db.gameObject.SetActive(true);
+                        }
+                    }
+                    catch (Exception e) { Plugin.Log.LogWarning("Could not free the corpse: " + e.Message); }
+                    if (!replaced) EnsureCorpseGrabbable(s);
+                    if (Plugin.DebugLogging.Value) corpseDumpAt = Time.time + 3f;
                     Active.Remove(id);
                 }
+            }
+        }
+
+        // The game only makes a body pick-up-able (its "ragdoll grabbable object") when a player dies WITH a
+        // new body. A cocooned victim dies with the hanging stand-in body instead, so without this their
+        // corpse could never be picked up. Only the host creates it, like the game does.
+        static float corpseDumpAt = -1f;
+
+        // The game's "bodyID" is either a plain int or a network variable holding one; handle both.
+        static bool ReadBodyId(FieldInfo f, object inst, out int id)
+        {
+            id = -1;
+            object v = f.GetValue(inst);
+            if (v is int) { id = (int)v; return true; }
+            if (v == null) return false;
+            PropertyInfo vp = v.GetType().GetProperty("Value");
+            if (vp == null) return false;
+            object val = vp.GetValue(v, null);
+            if (!(val is int)) return false;
+            id = (int)val;
+            return true;
+        }
+
+        static bool WriteBodyId(FieldInfo f, object inst, int id)
+        {
+            if (f.FieldType == typeof(int)) { f.SetValue(inst, id); return true; }
+            object v = f.GetValue(inst);
+            PropertyInfo vp = v != null ? v.GetType().GetProperty("Value") : null;
+            if (vp == null) return false;
+            vp.SetValue(v, id, null);
+            return true;
+        }
+
+        // With DebugLogging on, 3 s after a wrapped player dies, write down what the game thinks of every
+        // dead body and every pick-up object (so a body that cannot be picked up can be diagnosed).
+        static readonly List<CocoonState> PendingStandIns = new List<CocoonState>();
+
+        // The game's normal body can arrive a moment after the death is noticed. Once it is there the hanging
+        // stand-in goes; if it never comes, fall back to making the stand-in itself pick-up-able.
+        public static void TickStandIns()
+        {
+            for (int i = PendingStandIns.Count - 1; i >= 0; i--)
+            {
+                CocoonState s = PendingStandIns[i];
+                try
+                {
+                    if (s.StandIn == null) { PendingStandIns.RemoveAt(i); continue; }
+                    DeadBodyInfo cur = s.Player != null ? s.Player.deadBody : null;
+                    if (cur != null && cur != s.StandIn)
+                    {
+                        UnityEngine.Object.Destroy(s.StandIn.gameObject);
+                        PendingStandIns.RemoveAt(i);
+                    }
+                    else if (Time.time > s.StandInDeadline)
+                    {
+                        PendingStandIns.RemoveAt(i);
+                        if (cur != null)
+                        {
+                            cur.canBeGrabbedBackByPlayers = true;
+                            if (cur.attachedTo != null && cur.grabBodyObject == null) { cur.attachedTo = null; cur.attachedLimb = null; cur.matchPositionExactly = false; }
+                        }
+                        EnsureCorpseGrabbable(s);
+                    }
+                }
+                catch (Exception e) { PendingStandIns.RemoveAt(i); Plugin.Log.LogWarning("Stand-in clean-up failed: " + e.Message); }
+            }
+        }
+
+        public static void TickCorpseDump()
+        {
+            if (corpseDumpAt < 0f || Time.time < corpseDumpAt) return;
+            corpseDumpAt = -1f;
+            try
+            {
+                Plugin.Log.LogInfo("=== Corpse dump ===");
+                foreach (RagdollGrabbableObject r in UnityEngine.Object.FindObjectsOfType<RagdollGrabbableObject>())
+                    Plugin.Log.LogInfo("Grab object '" + r.name + "' pos=" + r.transform.position + " " + DescribeFields(r));
+                foreach (DeadBodyInfo d in UnityEngine.Object.FindObjectsOfType<DeadBodyInfo>())
+                    Plugin.Log.LogInfo("Dead body '" + d.name + "' pos=" + d.transform.position + " attachedTo=" + (d.attachedTo != null ? d.attachedTo.name : "-") + " " + DescribeFields(d));
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Corpse dump failed: " + e.Message); }
+        }
+
+        static string DescribeFields(object o)
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            foreach (FieldInfo f in o.GetType().GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                try
+                {
+                    object v = f.GetValue(o);
+                    if (v == null) { sb.Append(f.Name).Append("=null "); continue; }
+                    Type ft = f.FieldType;
+                    if (ft == typeof(bool) || ft == typeof(int) || ft == typeof(float) || ft == typeof(string) || ft.IsEnum) sb.Append(f.Name).Append('=').Append(v).Append(' ');
+                    else if (ft.Name.StartsWith("NetworkVariable"))
+                    {
+                        PropertyInfo vp = ft.GetProperty("Value");
+                        sb.Append(f.Name).Append('=').Append(vp != null ? vp.GetValue(v, null) : "?").Append(' ');
+                    }
+                    else if (typeof(UnityEngine.Object).IsAssignableFrom(ft)) sb.Append(f.Name).Append("=set ");
+                }
+                catch (Exception) { }
+            }
+            return sb.ToString();
+        }
+
+        private static void EnsureCorpseGrabbable(CocoonState s)
+        {
+            string stage = "start";
+            try
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm == null || !nm.IsServer) return;
+                PlayerControllerB p = s.Player;
+                StartOfRound sor = StartOfRound.Instance;
+                if (p == null || !p.isPlayerDead || sor == null) return;
+                if (sor.ragdollGrabbableObjectPrefab == null) { Plugin.Log.LogWarning("Corpse pick-up: the game has no ragdoll grabbable prefab."); return; }
+                int id = (int)p.playerClientId;
+
+                stage = "find bodyID";
+                FieldInfo bodyIdField = typeof(RagdollGrabbableObject).GetField("bodyID", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (bodyIdField == null) { Plugin.Log.LogWarning("Corpse pick-up: RagdollGrabbableObject.bodyID not found."); return; }
+
+                stage = "look for an existing one";
+                foreach (RagdollGrabbableObject r in UnityEngine.Object.FindObjectsOfType<RagdollGrabbableObject>())
+                {
+                    if (r == null) continue;
+                    int existing;
+                    if (ReadBodyId(bodyIdField, r, out existing) && existing == id) { Plugin.Dbg("Corpse pick-up: player " + id + " already has a grabbable body."); return; }
+                }
+
+                stage = "create";
+                Vector3 pos = p.deadBody != null ? p.deadBody.transform.position : p.transform.position;
+                Transform parent = sor.propsContainer != null ? sor.propsContainer : null;
+                GameObject go = parent != null
+                    ? UnityEngine.Object.Instantiate(sor.ragdollGrabbableObjectPrefab, pos, Quaternion.identity, parent)
+                    : UnityEngine.Object.Instantiate(sor.ragdollGrabbableObjectPrefab, pos, Quaternion.identity);
+
+                stage = "find components";
+                Unity.Netcode.NetworkObject netObj = go.GetComponentInChildren<Unity.Netcode.NetworkObject>(true);
+                RagdollGrabbableObject rg = go.GetComponentInChildren<RagdollGrabbableObject>(true);
+                if (netObj == null || rg == null)
+                {
+                    Plugin.Log.LogWarning("Corpse pick-up: the new object has netObj=" + (netObj != null) + " ragdoll=" + (rg != null));
+                    UnityEngine.Object.Destroy(go);
+                    return;
+                }
+
+                stage = "spawn";
+                netObj.Spawn(false);
+
+                stage = "set bodyID";
+                if (!WriteBodyId(bodyIdField, rg, id))
+                {
+                    Plugin.Log.LogWarning("Corpse pick-up: could not set bodyID (field type " + bodyIdField.FieldType.Name + ").");
+                    return;
+                }
+                Plugin.Log.LogInfo("Player " + id + " died in a cocoon: made their body pick-up-able.");
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("Could not make the corpse pick-up-able (at step '" + stage + "'): " + e);
             }
         }
 
@@ -1783,7 +2057,7 @@ namespace SpiderCocoon
         internal static bool AvailableDropped(CocoonState s, out DeadBodyInfo body)
         {
             body = null;
-            if (s == null || !s.Hung || !s.WasStolen || s.Thief != null || s.BugThief != null || s.Player == null || s.Player.isPlayerDead) return false;
+            if (s == null || !s.Hung || !s.WasStolen || s.BrackenDropped || s.Thief != null || s.BugThief != null || s.Player == null || s.Player.isPlayerDead) return false;
             body = s.Player.deadBody;
             return body != null && body.bodyParts != null && body.bodyParts.Length > 6;
         }
@@ -2040,7 +2314,41 @@ namespace SpiderCocoon
 
         // Runs after the Bracken's own AI step: point it at the victim.
         static float nextCarryLog;
+        static readonly Dictionary<FlowermanAI, Vector3> CarryGoals = new Dictionary<FlowermanAI, Vector3>();
         // While a Bracken carries a stolen cocoon, make sure it really walks away with it.
+        static float nextAnimLog;
+        // While carrying, the Bracken must look like it is walking. If its animator has been switched off or
+        // slowed to a standstill (by the game or another mod), switch it back on. With DebugLogging on, also
+        // write what the animator is doing every 2 s so a sliding Bracken can be diagnosed.
+        static void KeepWalkAnimation(FlowermanAI b)
+        {
+            try
+            {
+                Animator an = b.creatureAnimator;
+                if (an == null) return;
+                if (!an.enabled) { an.enabled = true; Plugin.Dbg("Bracken animator was off while carrying: switched it back on."); }
+                if (an.speed < 0.5f) { Plugin.Dbg("Bracken animator speed was " + an.speed.ToString("0.00") + " while carrying: set to 1."); an.speed = 1f; }
+                if (Time.time < nextAnimLog) return;
+                nextAnimLog = Time.time + 2f;
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                foreach (AnimatorControllerParameter ap in an.parameters)
+                {
+                    sb.Append(ap.name).Append('=');
+                    if (ap.type == AnimatorControllerParameterType.Bool) sb.Append(an.GetBool(ap.name));
+                    else if (ap.type == AnimatorControllerParameterType.Float) sb.Append(an.GetFloat(ap.name).ToString("0.00"));
+                    else if (ap.type == AnimatorControllerParameterType.Int) sb.Append(an.GetInteger(ap.name));
+                    else sb.Append("trigger");
+                    sb.Append(' ');
+                }
+                AnimatorStateInfo st = an.GetCurrentAnimatorStateInfo(0);
+                float vel = b.agent != null ? b.agent.velocity.magnitude : -1f;
+                Plugin.Dbg("Bracken animator: " + sb.ToString() + "| layer0 state=" + st.shortNameHash + " t=" + st.normalizedTime.ToString("0.00") +
+                    " speed=" + an.speed.ToString("0.00") + " layer1 weight=" + (an.layerCount > 1 ? an.GetLayerWeight(1).ToString("0.00") : "-") +
+                    " agent velocity=" + vel.ToString("0.0"));
+            }
+            catch (Exception) { }
+        }
+
         static void DriveCarry(FlowermanAI b)
         {
             bool mine = false;
@@ -2050,18 +2358,46 @@ namespace SpiderCocoon
                 if (b.carryingPlayerBody) mine = true;
                 else
                 {
-                    // the game made the Bracken drop it: stop forcing its movement
+                    // the game made the Bracken drop it (it reached its lair, or it was stunned): stop forcing
+                    // its movement, and do not let it pick the same cocoon straight up again
+                    Plugin.Log.LogInfo("Bracken has put the cocoon down.");
+                    kv.Value.BrackenDropped = true;
                     ClearDragPoint(kv.Value, kv.Value.Player != null ? kv.Value.Player.deadBody : null);
                     kv.Value.Thief = null;
                 }
             }
-            if (!mine) return;
-            Vector3 goal = b.favoriteSpot != null ? b.favoriteSpot.position : b.transform.position;
-            if (b.favoriteSpot == null || Vector3.Distance(goal, b.transform.position) < 3f)
+            if (!mine) { CarryGoals.Remove(b); return; }
+
+            // Pick the place to carry the cocoon to ONCE: the Bracken's own lair (its favourite spot), or a far
+            // corner if it is already standing at its lair. Re-picking on arrival sent it running back and forth.
+            Vector3 goal;
+            if (!CarryGoals.TryGetValue(b, out goal))
             {
-                Transform far = b.ChooseFarthestNodeFromPosition(b.transform.position);
-                if (far != null) { b.favoriteSpot = far; goal = far.position; }
+                goal = b.favoriteSpot != null ? b.favoriteSpot.position : b.transform.position;
+                if (b.favoriteSpot == null || Vector3.Distance(goal, b.transform.position) < 3f)
+                {
+                    Transform far = b.ChooseFarthestNodeFromPosition(b.transform.position);
+                    if (far != null) { b.favoriteSpot = far; goal = far.position; }
+                }
+                CarryGoals[b] = goal;
             }
+
+            Vector3 flat = b.transform.position - goal;
+            flat.y = 0f;
+            if (flat.magnitude < 3f)
+            {
+                // Arrived: put the cocoon down here and let the Bracken go back to normal.
+                Plugin.Log.LogInfo("Bracken puts the cocoon down at its lair.");
+                CarryGoals.Remove(b);
+                foreach (KeyValuePair<int, CocoonState> kv in new List<KeyValuePair<int, CocoonState>>(Cocoon.ActiveStates))
+                {
+                    if (kv.Value.Thief != b) continue;
+                    kv.Value.BrackenDropped = true;
+                    ReleaseCarry(kv.Value, kv.Value.Player != null ? kv.Value.Player.deadBody : null);
+                }
+                return;
+            }
+            KeepWalkAnimation(b);
             b.movingTowardsTargetPlayer = false;
             b.moveTowardsDestination = true;
             if (b.agent != null && b.agent.enabled && b.agent.isOnNavMesh)
@@ -2377,6 +2713,18 @@ namespace SpiderCocoon
                     body.matchPositionExactly = false;
                     body.attachedTo = null;
                 }
+                else if (body == null)
+                {
+                    // The victim's body is no longer known (they died): find whatever is still glued to the point.
+                    foreach (DeadBodyInfo d in UnityEngine.Object.FindObjectsOfType<DeadBodyInfo>())
+                    {
+                        if (d != null && d.attachedTo == point)
+                        {
+                            d.matchPositionExactly = false;
+                            d.attachedTo = null;
+                        }
+                    }
+                }
             }
             catch (Exception) { }
             UnityEngine.Object.Destroy(point.gameObject);
@@ -2489,7 +2837,7 @@ namespace SpiderCocoon
             if (b == null) return;
             try
             {
-                if (b.bodyBeingCarried == body)
+                if (b.bodyBeingCarried == body || (body == null && b.bodyBeingCarried != null && b.bodyBeingCarried.attachedTo == null))
                 {
                     b.carryingPlayerBody = false;
                     b.bodyBeingCarried = null;
@@ -2809,7 +3157,19 @@ namespace SpiderCocoon
             if (s != null) { s.BugThief = null; s.BugCarryPoint = null; }
             if (h == null || body == null)
             {
-                if (point != null) UnityEngine.Object.Destroy(point.gameObject);
+                if (point != null)
+                {
+                    try
+                    {
+                        // The victim's body is no longer known (they died): free whatever is still glued to the point.
+                        foreach (DeadBodyInfo d in UnityEngine.Object.FindObjectsOfType<DeadBodyInfo>())
+                        {
+                            if (d != null && d.attachedTo == point) { d.matchPositionExactly = false; d.attachedTo = null; }
+                        }
+                    }
+                    catch (Exception) { }
+                    UnityEngine.Object.Destroy(point.gameObject);
+                }
                 return;
             }
             try
@@ -3288,6 +3648,154 @@ namespace SpiderCocoon
             {
                 Plugin.Log.LogError("SpiderWebCountPatch failed: " + e);
             }
+        }
+    }
+
+    // Spider footsteps played as one-shot sounds: scale them by the footstep volume setting.
+    internal static class SpiderStepSoundPatch
+    {
+        static int logged;
+        internal static void Prefix(AudioSource __instance, AudioClip clip, ref float volumeScale)
+        {
+            try
+            {
+                if (clip == null || __instance == null) return;
+                string n = clip.name;
+                bool stepLike = n.IndexOf("step", StringComparison.OrdinalIgnoreCase) >= 0 || n.IndexOf("foot", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!stepLike && !Plugin.DebugLogging.Value) return;
+                if (__instance.GetComponentInParent<SandSpiderAI>() == null) return;
+                if (Plugin.DebugLogging.Value && logged < 30)
+                {
+                    logged++;
+                    Plugin.Dbg("Spider one-shot sound: clip='" + n + "' source='" + __instance.gameObject.name + "' scale=" + volumeScale.ToString("0.00") + " stepLike=" + stepLike);
+                }
+                if (stepLike && !SpiderQuietStepsPatch.IsHandled(__instance)) volumeScale *= Mathf.Clamp01(Plugin.SpiderFootstepVolume.Value);
+            }
+            catch (Exception) { }
+        }
+    }
+
+    // Stops any monster picking a wrapped-up player's hidden body as the answer to "who is nearest / who can I see".
+    internal static class EnemyPickPlayerPatch
+    {
+        internal static void Postfix(ref PlayerControllerB __result)
+        {
+            try
+            {
+                if (__result != null && Cocoon.IsCocooned(__result)) __result = null;
+            }
+            catch (Exception) { }
+        }
+    }
+
+    // Snare fleas and thumpers: if one has locked on to a wrapped-up player anyway, make it let go.
+    internal static class EnemyDropTargetPatch
+    {
+        // A hiding snare flea drops when the local player is below it. If this game's own player is wrapped up
+        // (their hidden body is still where they were caught), it must not fall. Run before AND after the
+        // flea's own update so there is no frame where the check can fire.
+        internal static void HoldFlea(EnemyAI e)
+        {
+            try
+            {
+                CentipedeAI flea = e as CentipedeAI;
+                if (flea == null) return;
+                PlayerControllerB me = GameNetworkManager.Instance != null ? GameNetworkManager.Instance.localPlayerController : null;
+                FieldInfo tf = typeof(CentipedeAI).GetField("triggeredFall", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (me == null || tf == null) return;
+                if (Cocoon.IsCocooned(me)) { tf.SetValue(flea, true); FleaHeld.Add(flea); }
+                else if (FleaHeld.Remove(flea)) tf.SetValue(flea, false);
+            }
+            catch (Exception) { }
+        }
+
+        internal static void Prefix(EnemyAI __instance) { HoldFlea(__instance); }
+
+        static float nextLog;
+        static readonly HashSet<CentipedeAI> FleaHeld = new HashSet<CentipedeAI>();
+        internal static void Postfix(EnemyAI __instance)
+        {
+            try
+            {
+                if (!(__instance is CentipedeAI) && !(__instance is CrawlerAI)) return;
+                HoldFlea(__instance);
+                PlayerControllerB t = __instance.targetPlayer;
+                if (t == null || !Cocoon.IsCocooned(t)) return;
+                __instance.targetPlayer = null;
+                __instance.movingTowardsTargetPlayer = false;
+                if (Time.time >= nextLog)
+                {
+                    nextLog = Time.time + 5f;
+                    Plugin.Dbg(__instance.GetType().Name + " dropped its target: that player is wrapped up.");
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
+    // Turns the spider's footsteps down. Finds the spider's footstep audio sources once (by name), remembers
+    // each one's original volume, and keeps them at the chosen fraction of it. Only affects this game's audio.
+    [HarmonyPatch(typeof(SandSpiderAI), nameof(SandSpiderAI.Update))]
+    internal static class SpiderQuietStepsPatch
+    {
+        private sealed class Found
+        {
+            public List<AudioSource> Sources = new List<AudioSource>();
+            public List<float> BaseVolumes = new List<float>();
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SandSpiderAI, Found> Table
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<SandSpiderAI, Found>();
+
+        private static readonly HashSet<AudioSource> Handled = new HashSet<AudioSource>();
+        internal static bool IsHandled(AudioSource a) { return a != null && Handled.Contains(a); }
+
+        private static bool LooksLikeSteps(string n)
+        {
+            if (string.IsNullOrEmpty(n)) return false;
+            n = n.ToLowerInvariant();
+            return n.Contains("foot") || n.Contains("step");
+        }
+
+        private static void Postfix(SandSpiderAI __instance)
+        {
+            try
+            {
+                Found f;
+                if (!Table.TryGetValue(__instance, out f))
+                {
+                    f = new Found();
+                    Table.Add(__instance, f);
+                    HashSet<AudioSource> seen = new HashSet<AudioSource>();
+                    // 1. fields of the spider script with "foot"/"step" in the name
+                    foreach (FieldInfo fi in typeof(SandSpiderAI).GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                    {
+                        if (fi.FieldType != typeof(AudioSource) || !LooksLikeSteps(fi.Name)) continue;
+                        AudioSource a = fi.GetValue(__instance) as AudioSource;
+                        if (a != null && seen.Add(a)) { f.Sources.Add(a); f.BaseVolumes.Add(a.volume); Handled.Add(a); }
+                    }
+                    // 2. audio sources on the spider whose own name has "foot"/"step" in it
+                    foreach (AudioSource a in __instance.GetComponentsInChildren<AudioSource>(true))
+                    {
+                        if (a != null && LooksLikeSteps(a.gameObject.name) && seen.Add(a)) { f.Sources.Add(a); f.BaseVolumes.Add(a.volume); Handled.Add(a); }
+                    }
+                    if (Plugin.DebugLogging.Value)
+                    {
+                        foreach (AudioSource a in __instance.GetComponentsInChildren<AudioSource>(true))
+                        {
+                            Plugin.Dbg("Spider audio source: '" + a.gameObject.name + "' volume=" + a.volume.ToString("0.00") +
+                                " clip=" + (a.clip != null ? a.clip.name : "-") + " quietened=" + seen.Contains(a));
+                        }
+                    }
+                    Plugin.Log.LogInfo("Spider footsteps: found " + f.Sources.Count + " audio source(s) to turn down.");
+                }
+                float mul = Mathf.Clamp01(Plugin.SpiderFootstepVolume.Value);
+                for (int i = 0; i < f.Sources.Count; i++)
+                {
+                    if (f.Sources[i] != null) f.Sources[i].volume = f.BaseVolumes[i] * mul;
+                }
+            }
+            catch (Exception) { }
         }
     }
 
