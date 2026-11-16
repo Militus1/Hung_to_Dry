@@ -34,6 +34,8 @@ The Bunker Spider's bite no longer kills. Instead, you're paralysed, wrapped in 
 
 The settings file is `BepInEx/config/Militus.HungToDry.cfg`. It appears after the first time you run the game with the mod.
 
+**Everyone in the lobby should use the same settings.** The settings are not synced from the host. Each player's own file applies on their own game, and the death timer in particular runs on the hung player's game. If settings differ, timers on other players' screens can disagree with when the victim actually dies. The easiest way is to share one config file, or leave everything on default.
+
 | Setting | Default | What it does |
 |---|---|---|
 | `SecondsHangingBeforeDeath` | 45 | How long a victim stays hung up before dying |
