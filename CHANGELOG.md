@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.0
+- **Pecking order:** only one thief goes for a cocoon at a time, and the Bracken outranks the loot bug. A loot bug that sees a Bracken heading for the cocoon backs off and lets it through (`LootBugYield`, `LootBugYieldMeters`).
+- **Bracken ambush:** a Bracken that notices a victim being hung now hides out of sight and waits. It only comes out once the spider has hung the cocoon and gone invisible (`BrackenAmbush`, `BrackenAmbushMinMeters`, `BrackenAmbushMaxMeters`, `BrackenAmbushMaxWaitSeconds`). If the spider is still about after `BrackenAmbushPatienceSeconds` (12 s), it comes out anyway, so it never hides until the victim dies.
+- A Bracken can take a cocoon a loot bug has dropped at its nest. A loot bug will never take a cocoon a thief has already carried.
+- **New carry style:** the Bracken now carries the cocoon over its shoulder, with its arm draped over it (`BrackenCarryStyle`: Shoulder, Drag or Hand; position, angle and arm settings in `[Thieves]`). Set `BrackenArmOver` to false to keep the arm in its normal pose.
+- **Fix:** if something blocks the death (for example Imperium's god mode), the player is now freed from the cocoon with the camera restored, instead of being left able to move but unable to see.
+- The log is much quieter. Repetitive detail is hidden unless `DebugLogging` (`[Testing]`) is on.
+- Testing keys for developers (all off unless `EnableDebugSpawnKey` is true): F6 spider, F8 Bracken, F10 loot bug, F11 remove every enemy, F4 Bracken bone list, F7 label list.
+- New settings are added to your config automatically. Existing values are kept. Delete your old config file if you want the new carry defaults.
+
 ## 1.7.0
 - **Thieves:** a Bracken or a loot bug that notices a hung victim can now cut the cocoon down and carry it off. The Bracken takes it to its lair, the loot bug holds it up over its head and carries it to its nest. Each waits a few seconds first so the spider can finish hanging the victim.
 - A stolen victim gets 30 extra seconds before dying (`BrackenStealExtraSeconds`), so the team has time to find them.

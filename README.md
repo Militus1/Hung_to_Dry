@@ -6,7 +6,7 @@ The Bunker Spider's bite no longer kills. Instead, you're paralysed, wrapped in 
 
 **Teammates can save you.** Stand near a hung cocoon and hold the cut-down key until the silk gives way. A countdown on your screen (and next to the cut-down prompt) shows how long is left.
 
-**Thieves.** A Bracken or a loot bug that spots a hung cocoon may cut it down and carry it away: the Bracken to its lair, the loot bug up over its head to its nest. The victim stays wrapped and gets 30 extra seconds, so find them fast. Nobody is spared by being carried off: if the timer runs out, they die.
+**Thieves.** A Bracken or a loot bug that spots a hung cocoon may cut it down and carry it away: the Bracken over its shoulder to its lair, the loot bug up over its head to its nest. A Bracken hides out of sight until the spider has finished, then makes its move, and a loot bug will get out of its way. The victim stays wrapped and gets 30 extra seconds, so find them fast. Nobody is spared by being carried off: if the timer runs out, they die.
 
 ## Features
 
@@ -14,7 +14,7 @@ The Bunker Spider's bite no longer kills. Instead, you're paralysed, wrapped in 
 - Look around while you're wrapped (mouse to turn, mouse wheel to zoom)
 - Teammates cut victims down by holding a key near the cocoon, with a short immunity afterwards
 - Everything is synced in multiplayer
-- **Thieves:** Brackens and loot bugs can steal a hung victim (the victim gets extra time)
+- **Thieves:** Brackens and loot bugs can steal a hung victim (the victim gets extra time). Only one thief goes for a cocoon at a time, the Bracken ambushes from hiding and carries it over its shoulder
 - **Death countdown** on the wrapped player's screen and next to the rescue prompt
 - Wrapped players cannot be targeted by any monster, and a freed player is left alone by every monster for a few seconds
 - A Bracken that loses its target keeps stalking instead of retreating; no black screen when a Bracken kills you
@@ -61,6 +61,19 @@ The settings file is `BepInEx/config/Militus.HungToDry.cfg`. It appears after th
 | `BrackenStealExtraSeconds` | 30 | Extra seconds added to the victim's death timer when they are stolen |
 | `LootBugCarryHeight` | 2.2 | How high (metres) above itself a loot bug holds the cocoon |
 | `LootBugRearUpDegrees` | 55 | How far a loot bug rears up while carrying (0 = stays on all fours, negative = tips the other way) |
+| `LootBugYield` | true | A loot bug backs off when a Bracken is going for a cocoon nearby |
+| `LootBugYieldMeters` | 15 | How close a Bracken has to be (to the cocoon or the bug) for the loot bug to back off |
+| `BrackenAmbush` | true | A Bracken hides out of sight until the spider has hung the cocoon and gone invisible. Off = it walks straight to the victim |
+| `BrackenAmbushMinMeters` / `BrackenAmbushMaxMeters` | 8 / 16 | How far from the victim the Bracken looks for a hiding place |
+| `BrackenAmbushMaxWaitSeconds` | 90 | Longest the Bracken hides before giving up |
+| `BrackenAmbushPatienceSeconds` | 12 | If the cocoon has been hung this long and the spider is still about, the Bracken comes out anyway |
+| `BrackenCarryStyle` | Shoulder | How the Bracken carries the cocoon: `Shoulder`, `Drag` (trails behind) or `Hand` (the game's own carry) |
+| `BrackenCarryHeight` / `BrackenCarrySide` / `BrackenCarryBack` | 2.7 / 0.75 / -0.1 | Shoulder style: where the cocoon is held, in metres (height, to the right, behind) |
+| `BrackenCarryPitch` / `BrackenCarryYaw` / `BrackenCarryRoll` | 90 / 0 / 0 | Shoulder style: the angle the cocoon is held at, in degrees |
+| `BrackenDragDistance` / `BrackenDragHeight` | 1.2 / 0.9 | Drag style: how far behind and how high above the floor the cocoon trails |
+| `BrackenDragNormalPose` | true | The Bracken walks in its normal pose while carrying instead of the game's arms-out pose |
+| `BrackenArmOver` | true | The Bracken's arm is draped over the cocoon while carrying |
+| `BrackenArmUp` / `BrackenArmIn` / `BrackenArmForward` | -0.2 / 0.25 / 0 | Where the hand rests relative to the cocoon's carry point, in metres |
 | `DropHeldItems` | true | Victims drop what they are holding when caught |
 | `LookSensitivity` | 0.12 | Mouse speed for the cocoon camera |
 | `ChaseBoostEnabled` | true | Spider speeds up as it closes in, only with line of sight |
@@ -81,7 +94,8 @@ The settings file is `BepInEx/config/Militus.HungToDry.cfg`. It appears after th
 | `WebCountMultiplier` | 2 | How many webs a spider places (1 = the game's normal 6 to 8) |
 | `WebPlaceRateMultiplier` | 2 | How often a patrolling spider places webs |
 | `PatrolRadiusMultiplier` | 2 | How far from its start the spider roams while placing webs |
-| `EnableDebugSpawnKey` | false | Testing only: host presses the spawn key (default F6) to spawn a spider (F7 logs nearby labels) |
+| `EnableDebugSpawnKey` | false | Testing only: lets the host press F6 to spawn a spider, F8 a Bracken, F10 a loot bug, F11 to remove every enemy (F4 and F7 write debug lists to the log) |
+| `DebugLogging` (`[Testing]`) | false | Writes extra, repetitive detail to the log. Leave off unless you are chasing a problem |
 
 ## Emergency release
 
