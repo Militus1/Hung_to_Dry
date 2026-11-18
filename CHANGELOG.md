@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.8.2
+- **Venom (new, on by default):** a bite no longer wraps you instantly. For `VenomSeconds` (8 s by default) you stumble about slowed and dizzy, with your screen warping and a heartbeat that speeds up (`VenomHeartbeat`). Then you collapse where you stand and the spider walks over, wraps you and hangs you as before. Set `VenomSeconds` to 0 for the old instant wrap. Everyone in the lobby should use the same value. This is new and has had limited multiplayer testing, so reports are welcome.
+- **If the spider dies while the venom is in you,** you still collapse, lie there a moment and recover. If another spider is within `VenomHandoverMeters` (25 m by default, 0 = off), it takes over and wraps you instead.
+- **Leaving the facility** while venomed means the spider cannot follow: you collapse and recover instead of being dropped outside.
+- **Bite cooldown (`BiteCooldownSeconds`, 8 s by default):** a spider that has just bitten someone will not bite anyone else for a few seconds, so a group is not caught in one pass.
+- **Freed players** lose their immunity the moment they attack a monster (`ImmunityEndsOnAttack`), so a rescue cannot be used as a free window to fight.
+- **Cause of death** on a victim who dies in a cocoon is now Suffocation (`SuffocationDeath`), which is what the scanner shows on the body.
+- **Fix:** being freed while using the door no longer leaves you stranded on the other side of it.
+- **Fix:** a player who gets stuck slowed after leaving a web is now freed from the slowdown automatically.
+- **Emergency release (F9) is now off by default** (`EmergencyReleaseKey`); turn it on in the config if you want it. A stuck cocoon is still freed automatically after `VictimHoldSeconds`.
+- **New setting `SpiderFootstepRange`** (default 1 = unchanged): how far away the spider's footsteps can be heard. The experimental `SpiderFootstepVolume` from 1.8.1 is removed because it did not work reliably.
+- Smaller things: the log is tidier, and two minor performance improvements.
+- New settings are added to your config automatically; existing values are kept. Delete your old config file if you want the new defaults.
+
 ## 1.8.1
 - **Fix:** a player who dies in a cocoon now leaves an ordinary body that teammates can pick up and carry back, instead of an unpickable one.
 - **Fix:** the Bracken no longer runs back and forth with a cocoon. It carries it to its lair and puts it down there; nobody steals it again afterwards. Rescue time is no longer wasted.

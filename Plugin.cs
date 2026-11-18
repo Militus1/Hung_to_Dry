@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace SpiderCocoon
 {
-    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.8.1")]
+    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.8.2")]
     public class Plugin : BaseUnityPlugin
     {
         internal static ManualLogSource Log;
@@ -25,6 +25,7 @@ namespace SpiderCocoon
         // All of these can be edited in BepInEx\config\Militus.HungToDry.cfg
         internal static ConfigEntry<float> HoldSeconds;      // safety net: release if the spider never hangs the body
         internal static ConfigEntry<float> HangSeconds;      // time between being hung up and dying
+        internal static ConfigEntry<bool> ImmunityEndsOnAttack;  // hitting a monster while immune ends the immunity
         internal static ConfigEntry<float> ImmunitySeconds;  // only used if a victim is released
         internal static ConfigEntry<UnityEngine.InputSystem.Key> CutDownKey;   // hold this near a hung cocoon to rescue
         internal static ConfigEntry<bool> BrackenStaysAfterChase;
@@ -62,6 +63,8 @@ namespace SpiderCocoon
         internal static ConfigEntry<float> BrackenAmbushPatienceSeconds;
         internal static ConfigEntry<bool> LootBugYield;
         internal static ConfigEntry<float> LootBugYieldMeters;
+        internal static ConfigEntry<bool> EmergencyReleaseKey;                // F9 frees yourself instantly (off by default: it skips the whole mechanic)
+        internal static ConfigEntry<bool> SuffocationDeath;                    // cause of death shown on scanner/other mods: Suffocation instead of Mauling
         internal static ConfigEntry<bool> WrapOnCatch;                         // wrap the victim where they are caught, then drag
         internal static ConfigEntry<float> StuckSeconds;                        // spider standing still this long while carrying = stuck
         internal static ConfigEntry<float> CarryTimeoutSeconds;                // spider carrying this long without hanging = hang where it is
@@ -95,7 +98,11 @@ namespace SpiderCocoon
         internal static ConfigEntry<UnityEngine.InputSystem.Key> DebugClearEnemiesKey; // testing only
         internal static ConfigEntry<UnityEngine.InputSystem.Key> DebugDumpBonesKey; // testing only
         internal static ConfigEntry<bool> DebugLogging;
-        internal static ConfigEntry<float> SpiderFootstepVolume;
+        internal static ConfigEntry<float> VenomSeconds;
+        internal static ConfigEntry<bool> VenomHeartbeat;
+        internal static ConfigEntry<float> VenomHandoverMeters;
+        internal static ConfigEntry<float> BiteCooldownSeconds;
+        internal static ConfigEntry<float> SpiderFootstepRange;
 
         private void Awake()
         {
@@ -112,6 +119,9 @@ namespace SpiderCocoon
             ImmunitySeconds = Config.Bind(
                 "General", "ImmunitySeconds", 10f,
                 "Seconds after a release during which no monster (spider, Bracken, loot bug) can target the freed player.");
+            ImmunityEndsOnAttack = Config.Bind(
+                "General", "ImmunityEndsOnAttack", true,
+                "If a freed player hits a monster while they are still immune, the immunity ends straight away (so a rescue cannot be used as a free window to attack).");
             DropHeldItems = Config.Bind(
                 "General", "DropHeldItems", true,
                 "Victims drop the items they are holding when they are caught.");
@@ -127,6 +137,27 @@ namespace SpiderCocoon
             WallReachMeters = Config.Bind(
                 "General", "WallReachMeters", 0.8f,
                 "How close (in metres) the spider has to get to its hanging spot on the wall before it hangs a victim. The game wants 0.1, which a spider that bumps into a wall or grate may never reach. 0 uses the game's own value.");
+            VenomSeconds = Config.Bind(
+                "Venom", "VenomSeconds", 8f,
+                new ConfigDescription("How long the bitten player stumbles about under the spider's venom (slowed, dizzy, screen warping) before they collapse and get wrapped. 0 = off: wrapped the instant they are bitten, as in 1.8.1 and earlier. Everyone in the game should use the same value.",
+                    new AcceptableValueRange<float>(0f, 30f)));
+            VenomHeartbeat = Config.Bind(
+                "Venom", "VenomHeartbeat", true,
+                "Plays the game's heartbeat sound, getting faster as the venom takes hold. Only the bitten player hears it. Does nothing if the game has no heartbeat sound.");
+            VenomHandoverMeters = Config.Bind(
+                "Venom", "VenomHandoverMeters", 25f,
+                new ConfigDescription("If the spider that bit a player dies while the venom is in them, and ANOTHER living spider is within this many metres, that spider walks over and carries on (wraps and hangs them). 0 = off: the player just collapses, lies there briefly and recovers.",
+                    new AcceptableValueRange<float>(0f, 60f)));
+            BiteCooldownSeconds = Config.Bind(
+                "Venom", "BiteCooldownSeconds", 8f,
+                new ConfigDescription("After a spider bites someone, that same spider will not bite anyone else for this many seconds, so a group walking past it is not all caught in one pass (it deals with the first victim first). 0 = off.",
+                    new AcceptableValueRange<float>(0f, 60f)));
+            EmergencyReleaseKey = Config.Bind(
+                "General", "EmergencyReleaseKey", false,
+                "Pressing F9 frees you from a cocoon instantly. Off by default because it skips the spider, the hang and the rescue. Turn on if you want a way out if something ever goes wrong (a stuck cocoon is also freed automatically after HoldSeconds).");
+            SuffocationDeath = Config.Bind(
+                "General", "SuffocationDeath", true,
+                "The victim's cause of death is Suffocation (hung and wrapped in silk) instead of Mauling. This is what the scanner shows on the body, and what other mods that read the cause of death will see. Turn off for the old Mauling cause (which also makes the corpse bloody).");
             WrapOnCatch = Config.Bind(
                 "General", "WrapOnCatch", true,
                 "The spider wraps the victim in silk straight away, where they were caught, and only then drags them to its lair. Turn off for the game's own order (drag first, wrap at the lair).");
@@ -314,10 +345,10 @@ namespace SpiderCocoon
             DebugClearEnemiesKey = Config.Bind(
                 "Testing", "DebugClearEnemiesKey", UnityEngine.InputSystem.Key.F11,
                 "The key that removes every enemy from the level (host only, needs EnableDebugSpawnKey). Anyone hung up is freed first.");
-            SpiderFootstepVolume = Config.Bind(
-                "General", "SpiderFootstepVolume", 1f,
-                new ConfigDescription("How loud the bunker spider's footsteps are, as a fraction of the game's normal volume. 1 = unchanged, 0.5 = half, 0 = silent. Experimental: may not take effect on every spider. Only changes what you hear on your own game.",
-                    new AcceptableValueRange<float>(0f, 1f)));
+            SpiderFootstepRange = Config.Bind(
+                "General", "SpiderFootstepRange", 1f,
+                new ConfigDescription("How far away the bunker spider's footsteps can be heard, as a fraction of the game's normal distance. 1 = unchanged, 0.5 = half the distance. Experimental. Only changes what you hear on your own game.",
+                    new AcceptableValueRange<float>(0.1f, 1f)));
             DebugLogging = Config.Bind(
                 "Testing", "DebugLogging", false,
                 "Writes extra, repetitive detail to the log (carry progress, notice-range checks, back-off messages). Leave off unless you are chasing a problem.");
@@ -366,7 +397,8 @@ namespace SpiderCocoon
             {
                 // Spider footsteps that the game plays as one-shot sounds: turn those down as well.
                 System.Reflection.MethodBase oneShot = AccessTools.Method(typeof(AudioSource), "PlayOneShot", new Type[] { typeof(AudioClip), typeof(float) });
-                if (oneShot != null) harmony.Patch(oneShot, prefix: new HarmonyMethod(typeof(SpiderStepSoundPatch), "Prefix"));
+                // The patch only writes debug log lines now, yet it would run for every sound in the game: only add it when debugging.
+                if (oneShot != null && DebugLogging.Value) harmony.Patch(oneShot, prefix: new HarmonyMethod(typeof(SpiderStepSoundPatch), "Prefix"));
             }
             catch (Exception e)
             {
@@ -382,7 +414,7 @@ namespace SpiderCocoon
                     {
                         if (mi.Name != name || mi.ReturnType != typeof(PlayerControllerB)) continue;
                         harmony.Patch(mi, postfix: new HarmonyMethod(typeof(EnemyPickPlayerPatch), "Postfix"));
-                        Log.LogInfo("Patched EnemyAI." + name + " so monsters skip wrapped players.");
+                        Dbg("Patched EnemyAI." + name + " so monsters skip wrapped players.");
                     }
                 }
                 HashSet<System.Reflection.MethodBase> patchedTargets = new HashSet<System.Reflection.MethodBase>();
@@ -401,7 +433,7 @@ namespace SpiderCocoon
             {
                 Log.LogWarning("Could not patch monster targeting: " + e.Message);
             }
-            Log.LogInfo("Hung to Dry 1.8.1 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
+            Log.LogInfo("Hung to Dry 1.8.2 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
         }
     }
 
@@ -433,7 +465,25 @@ namespace SpiderCocoon
         {
             try
             {
-                if (!Plugin.ShowDeathTimer.Value || Event.current.type != EventType.Repaint) return;
+                if (Event.current.type != EventType.Repaint) return;
+                if (Plugin.DebugLogging.Value && Cocoon.VenomTimerLeft >= 0f)
+                {
+                    if (timerStyle == null)
+                    {
+                        timerStyle = new GUIStyle(GUI.skin.label);
+                        timerStyle.alignment = TextAnchor.MiddleCenter;
+                        timerStyle.fontStyle = FontStyle.Bold;
+                        timerStyle.fontSize = 34;
+                        shadowStyle = new GUIStyle(timerStyle);
+                        shadowStyle.normal.textColor = Color.black;
+                    }
+                    timerStyle.normal.textColor = new Color(0.6f, 1f, 0.5f);
+                    Rect vr = new Rect(0f, Screen.height * 0.2f, Screen.width, 60f);
+                    string vt = "Venom: " + Cocoon.VenomTimerLeft.ToString("0.0") + "s";
+                    GUI.Label(new Rect(vr.x + 2f, vr.y + 2f, vr.width, vr.height), vt, shadowStyle);
+                    GUI.Label(vr, vt, timerStyle);
+                }
+                if (!Plugin.ShowDeathTimer.Value) return;
                 foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
                 {
                     CocoonState s = kv.Value;
@@ -473,7 +523,7 @@ namespace SpiderCocoon
                 if (part == null) continue;
                 Vector3 a = s.Player.transform.position, b2 = part.position;
                 a.y = 0f; b2.y = 0f;
-                if (Vector3.Distance(a, b2) > 3f) Cocoon.MoveVictimUnderBody(s.Player);
+                if (Vector3.Distance(a, b2) > 3f) Cocoon.MoveVictimUnderBody(s.Player, s.Spider);
             }
         }
 
@@ -482,7 +532,7 @@ namespace SpiderCocoon
             SyncGhosts();
             // Emergency release: press F9 to free yourself if anything ever goes wrong.
             var keyboard = UnityEngine.InputSystem.Keyboard.current;
-            if (keyboard != null && keyboard.f9Key.wasPressedThisFrame)
+            if (Plugin.EmergencyReleaseKey.Value && keyboard != null && keyboard.f9Key.wasPressedThisFrame)
             {
                 Cocoon.EmergencyRelease();
             }
@@ -802,6 +852,241 @@ namespace SpiderCocoon
             return player != null && Active.ContainsKey((int)player.playerClientId);
         }
 
+        // ---- Venom: a bitten player stumbles about for a while before the wrap ----
+        private static readonly HashSet<int> Venomed = new HashSet<int>();
+
+        public static bool IsVenomed(PlayerControllerB p)
+        {
+            return p != null && Venomed.Contains((int)p.playerClientId);
+        }
+
+        // Runs on every player's game when the spider bites. With venom off, wraps straight away.
+        public static void BeginVenom(PlayerControllerB victim, SandSpiderAI spider)
+        {
+            if (victim == null || victim.isPlayerDead) return;
+            float secs = Plugin.VenomSeconds.Value;
+            int id = (int)victim.playerClientId;
+            if (secs < 0.5f) { Begin(victim, spider); return; }
+            if (Active.ContainsKey(id) || Venomed.Contains(id)) return;
+            Venomed.Add(id);
+            VenomEpoch++; // a new bite cancels any fade-out still running
+            Plugin.Log.LogInfo("Player " + id + " bitten: venom for " + secs.ToString("0") + "s.");
+            CocoonRunner.Run(VenomRoutine(victim, spider, secs));
+        }
+
+        // ---- heartbeat that speeds up while the venom takes hold (uses a clip the game already has) ----
+        private static AudioClip heartClip;
+        private static bool heartSearched;
+        private static AudioSource heartSource;
+        private static float nextHeartAt;
+        private static bool heartLogged;
+
+        private static void VenomHeartbeat(PlayerControllerB victim, float k)
+        {
+            try
+            {
+                if (!Plugin.VenomHeartbeat.Value) return;
+                if (!heartSearched)
+                {
+                    heartSearched = true;
+                    foreach (AudioClip c in Resources.FindObjectsOfTypeAll<AudioClip>())
+                    {
+                        if (c == null) continue;
+                        string n = c.name.ToLowerInvariant();
+                        if (n.Contains("heart") || n.Contains("pulse"))
+                        {
+                            Plugin.Dbg("Venom heartbeat: found clip '" + c.name + "' (" + c.length.ToString("0.00") + "s).");
+                            if (heartClip == null && n.Contains("heartbeat") && !n.Contains("drop")) heartClip = c;
+                        }
+                    }
+                    if (heartClip == null) Plugin.Log.LogWarning("Venom heartbeat: no clip with 'heart' in its name was found in the game.");
+                }
+                if (heartClip == null || Time.time < nextHeartAt) return;
+                if (heartSource == null)
+                {
+                    GameObject go = new GameObject("HungToDryHeartbeat");
+                    UnityEngine.Object.DontDestroyOnLoad(go);
+                    heartSource = go.AddComponent<AudioSource>();
+                    heartSource.spatialBlend = 0f; // plain 2D sound: only the bitten player hears it
+                    heartSource.playOnAwake = false;
+                }
+                if (heartClip.loadState == AudioDataLoadState.Unloaded) heartClip.LoadAudioData();
+                // The player's own status-effect speaker goes through the game's normal audio setup; ours is the fallback.
+                AudioSource src = (victim != null && victim.statusEffectAudio != null) ? victim.statusEffectAudio : heartSource;
+                float vol = Mathf.Lerp(0.08f, 1f, Mathf.Pow(Mathf.Clamp01(k), 1.4f)); // barely there at first, full by the end
+                src.PlayOneShot(heartClip, vol);
+                if (!heartLogged)
+                {
+                    heartLogged = true;
+                    Plugin.Dbg("Venom heartbeat: playing '" + heartClip.name + "' through '" + src.gameObject.name + "' (volume " + src.volume.ToString("0.00") + ", mute=" + src.mute + ", loadState=" + heartClip.loadState + ").");
+                }
+                nextHeartAt = Time.time + Mathf.Max(heartClip.length, Mathf.Lerp(1.2f, 0.5f, k));
+            }
+            catch (Exception) { }
+        }
+
+        private static void ApplyVenomLook(PlayerControllerB victim, float k)
+        {
+            VenomHeartbeat(victim, k);
+            victim.overridePoisonValue = true;
+            victim.poison = Mathf.Lerp(victim.poison, Mathf.Lerp(0.2f, 0.8f, k), Time.deltaTime * 2f);
+            if (HUDManager.Instance != null) HUDManager.Instance.cadaverFilter = Mathf.Lerp(0f, 0.6f, k);
+        }
+
+        private static int VenomEpoch;
+        public static float VenomTimerLeft = -1f; // testing aid: seconds of venom left for the local player (shown only with DebugLogging)
+
+        // The spider died while its venom was in the player: the venom has already taken hold, so they still
+        // drop at full strength. They collapse the same way a wrapped victim does (a ragdoll of them falls to
+        // the ground where they stand, seen by everyone), lie there a few seconds, then get up and slowly recover.
+        // Runs on every player's game.
+        private static IEnumerator VenomCollapse(PlayerControllerB victim, SandSpiderAI spider)
+        {
+            int id = (int)victim.playerClientId;
+            bool local = IsLocal(victim);
+            Plugin.Log.LogInfo("Player " + id + ": the spider died but the venom has taken hold; collapsing, then recovering.");
+            SandSpiderAI heir = FindHeir(victim, spider);
+            if (heir != null)
+            {
+                // Another spider is close enough: it takes over where the dead one left off.
+                Plugin.Log.LogInfo("Player " + id + ": another spider is close by and takes over.");
+                Begin(victim, heir); // the heir's owner walks it over, grabs and wraps as usual
+                if (local && victim != null)
+                {
+                    VenomEpoch++;
+                    victim.overridePoisonValue = false;
+                    victim.poison = 0f;
+                    if (HUDManager.Instance != null) HUDManager.Instance.cadaverFilter = 0f;
+                }
+                yield break;
+            }
+            // A dead spider grabs nothing; a living one that cannot reach them must not either, so it gets no part in it.
+            Begin(victim, (spider != null && spider.isEnemyDead) ? spider : null); // nothing grabs the body, no death timer
+            CocoonState mine;
+            Active.TryGetValue(id, out mine);
+            int epoch = local ? ++VenomEpoch : VenomEpoch;
+            float t = 0f;
+            while (t < 8f && victim != null && !victim.isPlayerDead)
+            {
+                if (local) ApplyVenomLook(victim, 1f);
+                t += Time.deltaTime;
+                yield return null;
+            }
+            CocoonState now;
+            if (mine != null && Active.TryGetValue(id, out now) && now == mine && !mine.Hung) End(id);
+            if (local && victim != null && !victim.isPlayerDead && epoch == VenomEpoch)
+                yield return VenomFade(victim, epoch, 10f);
+        }
+
+        // Spiders never leave the facility (or enter it): one is only any use if it is on the same side as the player.
+        private static bool SpiderCanReach(SandSpiderAI spider, PlayerControllerB victim)
+        {
+            return spider != null && victim != null && spider.isOutside == !victim.isInsideFactory;
+        }
+
+        private static CauseOfDeath DeathCause()
+        {
+            return Plugin.SuffocationDeath.Value ? CauseOfDeath.Suffocation : CauseOfDeath.Mauling;
+        }
+
+        // Nearest living, idle spider within VenomHandoverMeters of the victim (other than the dead biter).
+        // Every game picks by the same rule (nearest), so they all agree.
+        private static SandSpiderAI FindHeir(PlayerControllerB victim, SandSpiderAI dead)
+        {
+            float range = Plugin.VenomHandoverMeters.Value;
+            if (range <= 0.5f || victim == null) return null;
+            SandSpiderAI best = null;
+            float bestD = range;
+            try
+            {
+                foreach (SandSpiderAI sp in UnityEngine.Object.FindObjectsOfType<SandSpiderAI>())
+                {
+                    if (sp == null || sp == dead || sp.isEnemyDead || !SpiderCanReach(sp, victim)) continue;
+                    if (HeldBodyField != null && HeldBodyField.GetValue(sp) != null) continue; // already busy with someone
+                    float d = Vector3.Distance(sp.transform.position, victim.transform.position);
+                    if (d < bestD) { bestD = d; best = sp; }
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogError("Looking for another spider failed: " + e); }
+            return best;
+        }
+
+        // The venom fades out over a few seconds instead of snapping off (e.g. when the spider is killed).
+        private static IEnumerator VenomFade(PlayerControllerB victim, int epoch, float duration)
+        {
+            float startPoison = victim != null ? victim.poison : 0f;
+            float startFilter = HUDManager.Instance != null ? HUDManager.Instance.cadaverFilter : 0f;
+            float t = 0f;
+            while (t < duration && victim != null && !victim.isPlayerDead && epoch == VenomEpoch)
+            {
+                float k = t / duration;
+                victim.overridePoisonValue = true;
+                victim.poison = Mathf.Lerp(startPoison, 0f, k);
+                if (HUDManager.Instance != null) HUDManager.Instance.cadaverFilter = Mathf.Lerp(startFilter, 0f, k);
+                t += Time.deltaTime;
+                yield return null;
+            }
+            // Only clean up if nothing newer (a fresh bite) has taken over.
+            if (epoch == VenomEpoch && victim != null)
+            {
+                victim.overridePoisonValue = false;
+                victim.poison = 0f;
+                if (HUDManager.Instance != null) HUDManager.Instance.cadaverFilter = 0f;
+            }
+        }
+
+        private static IEnumerator VenomRoutine(PlayerControllerB victim, SandSpiderAI spider, float secs)
+        {
+            int id = (int)victim.playerClientId;
+            bool local = IsLocal(victim);
+            bool finished = false;
+            bool spiderDied = false;
+            try
+            {
+                if (local)
+                {
+                    try { HUDManager.Instance.DisplayStatusEffect("VENOM DETECTED!\nMOTOR FUNCTION FAILING"); } catch (Exception) { }
+                }
+                float t = 0f;
+                while (t < secs)
+                {
+                    if (victim == null || victim.isPlayerDead) yield break;
+                    if (spider == null || spider.isEnemyDead) spiderDied = true; // the venom is already in them: it still runs its course
+                    if (local) { ApplyVenomLook(victim, Mathf.Clamp01(t / secs)); VenomTimerLeft = secs - t; }
+                    t += Time.deltaTime;
+                    yield return null;
+                }
+                // The player collapses where they stand; the spider walks over to them afterwards.
+                if (spider == null || spider.isEnemyDead) spiderDied = true;
+                else if (!SpiderCanReach(spider, victim))
+                {
+                    // The victim ran out of (or into) the facility during the venom: the spider cannot follow.
+                    spiderDied = true;
+                    Plugin.Log.LogInfo("Player " + id + ": the spider cannot reach them (inside/outside the facility).");
+                }
+                finished = victim != null && !victim.isPlayerDead && !spiderDied;
+            }
+            finally
+            {
+                Venomed.Remove(id);
+                if (local) VenomTimerLeft = -1f;
+                if (spiderDied && victim != null && !victim.isPlayerDead) CocoonRunner.Run(VenomCollapse(victim, spider)); // killed the spider: drops anyway
+                if (!finished) Plugin.Log.LogInfo("Player " + id + ": the venom wore off (spider dead or player gone).");
+                if (local && victim != null)
+                {
+                    if (spiderDied && !victim.isPlayerDead) { /* the collapse routine keeps the effect going */ }
+                    else if (!finished && !victim.isPlayerDead) CocoonRunner.Run(VenomFade(victim, ++VenomEpoch, 6f)); // wears off slowly
+                    else
+                    {
+                        victim.overridePoisonValue = false;
+                        victim.poison = 0f;
+                        if (HUDManager.Instance != null) HUDManager.Instance.cadaverFilter = 0f;
+                    }
+                }
+            }
+            if (finished) Begin(victim, spider);
+        }
+
         // True for a few seconds after a release, so the victim has time to get away.
         public static bool IsImmune(PlayerControllerB player)
         {
@@ -809,6 +1094,18 @@ namespace SpiderCocoon
             return player != null
                 && ImmuneUntil.TryGetValue((int)player.playerClientId, out until)
                 && Time.time < until;
+        }
+
+        // A freed player who attacks a monster loses their immunity at once.
+        public static void EndImmunityOnAttack(PlayerControllerB attacker)
+        {
+            try
+            {
+                if (attacker == null || !Plugin.ImmunityEndsOnAttack.Value || !IsImmune(attacker)) return;
+                ImmuneUntil[(int)attacker.playerClientId] = Time.time;
+                Plugin.Log.LogInfo("Player " + attacker.playerClientId + " attacked a monster while immune: immunity ended.");
+            }
+            catch (Exception) { }
         }
 
         internal static bool IsLocal(PlayerControllerB p)
@@ -839,8 +1136,35 @@ namespace SpiderCocoon
             spider.GrabBodyServerRpc((int)victim.playerClientId);
             spider.targetPlayer = null; // the frozen player is not a chase target any more
             spider.SwitchToBehaviourState(1);
+            Plugin.Dbg("Grab: spider=" + spider.transform.position.ToString("F1") + " player=" + victim.transform.position.ToString("F1") + " body=" + (body.bodyParts != null && body.bodyParts.Length > 5 ? body.bodyParts[5].transform.position.ToString("F1") : "?"));
             Plugin.Log.LogInfo("Spider grabbed player " + victim.playerClientId + "'s stand-in body.");
             if (Plugin.WrapOnCatch.Value) StartWrap(spider, "at the catch");
+        }
+
+        private static readonly FieldInfo WatchFromDistanceField = AccessTools.Field(typeof(SandSpiderAI), "watchFromDistance");
+        private static readonly FieldInfo ChaseTimerField = AccessTools.Field(typeof(SandSpiderAI), "chaseTimer");
+
+        // The victim has collapsed where they stand and the spider is some way off: let it walk over to the
+        // body and grab it there, instead of the body jumping to the spider. Only the spider's owner steers it.
+        private static IEnumerator SpiderApproach(CocoonState state)
+        {
+            SandSpiderAI spider = state.Spider;
+            PlayerControllerB victim = state.Player;
+            float t = 0f;
+            Plugin.Log.LogInfo("Spider walks over to the collapsed player.");
+            while (t < 20f)
+            {
+                if (spider == null || spider.isEnemyDead || victim == null || victim.isPlayerDead || !Active.ContainsKey((int)victim.playerClientId)) yield break;
+                if (Vector3.Distance(spider.transform.position, victim.transform.position) < 3.2f) break;
+                // Keep it chasing this player (the game would otherwise give up or go back to its lair).
+                if (spider.currentBehaviourStateIndex != 2) spider.SwitchToBehaviourState(2);
+                spider.targetPlayer = victim;
+                if (WatchFromDistanceField != null) WatchFromDistanceField.SetValue(spider, false);
+                if (ChaseTimerField != null) ChaseTimerField.SetValue(spider, 12.5f);
+                t += 0.2f;
+                yield return new WaitForSeconds(0.2f);
+            }
+            MakeSpiderGrab(spider, victim);
         }
 
         // Runs on EVERY player's game when a spider hit lands.
@@ -857,7 +1181,7 @@ namespace SpiderCocoon
             float lastImmuneUntil;
             if (ImmuneUntil.TryGetValue(id, out lastImmuneUntil))
             {
-                Plugin.Log.LogInfo("Player " + id + " caught again; their immunity ended "
+                Plugin.Dbg("Player " + id + " caught again; their immunity ended "
                     + (Time.time - lastImmuneUntil).ToString("F1") + "s ago (negative = they were still immune).");
             }
             bool isLocal = IsLocal(victim);
@@ -894,7 +1218,7 @@ namespace SpiderCocoon
                         AddCollider(state, c);
                     }
                     DisableColliders(state);
-                    Plugin.Log.LogInfo("Player " + id + ": switched off " + state.Colliders.Count + " collider(s) so nobody bumps into the hidden body.");
+                    Plugin.Dbg("Player " + id + ": switched off " + state.Colliders.Count + " collider(s) so nobody bumps into the hidden body.");
                 }
 
                 // 3. Paralyse. Only the victim's own game controls their input.
@@ -916,11 +1240,21 @@ namespace SpiderCocoon
 
                 // 4. Create the stand-in ragdoll the spider will carry.
                 //    This is the same call the game makes when a player dies, minus the dying.
-                victim.SpawnDeadBody(id, Vector3.zero, (int)CauseOfDeath.Mauling, victim, 0);
+                victim.SpawnDeadBody(id, Vector3.zero, (int)DeathCause(), victim, 0);
                 state.StandIn = victim.deadBody;
+                if (Plugin.DebugLogging.Value)
+                {
+                    Vector3 sp = state.StandIn != null && state.StandIn.bodyParts != null && state.StandIn.bodyParts.Length > 5 ? state.StandIn.bodyParts[5].transform.position : Vector3.zero;
+                    Plugin.Dbg("Player " + id + " collapse positions (local=" + isLocal + "): player=" + victim.transform.position.ToString("F1") + " playerBody=" + victim.thisPlayerBody.position.ToString("F1") + " standIn=" + sp.ToString("F1")
+                        + " spider=" + (spider != null ? spider.transform.position.ToString("F1") : "none") + " spiderOwner=" + (spider != null && spider.IsOwner));
+                }
 
                 // 5. Hand the body to the spider (only does anything on the spider owner's game).
-                MakeSpiderGrab(spider, victim);
+                if (Plugin.VenomSeconds.Value > 0.5f && spider != null && spider.IsOwner && !spider.isEnemyDead
+                    && Vector3.Distance(spider.transform.position, victim.transform.position) > 3.5f)
+                    CocoonRunner.Run(SpiderApproach(state));
+                else
+                    MakeSpiderGrab(spider, victim);
 
                 // 6. The victim watches from a camera that follows their body.
                 if (isLocal) StartCamera(state);
@@ -1053,7 +1387,7 @@ namespace SpiderCocoon
             CocoonState s;
             if (Active.TryGetValue(id, out s) && s == owner && !s.Hung)
             {
-                Plugin.Log.LogInfo("Player " + id + " was never hung up: safety release.");
+                Plugin.Log.LogWarning("Player " + id + " was never hung up: safety release.");
                 End(id);
             }
         }
@@ -1096,7 +1430,6 @@ namespace SpiderCocoon
 
             Plugin.Log.LogInfo("Player " + id + " dies in the cocoon.");
 
-            // spawnBody: false. The hanging stand-in body is the corpse, so no second body appears.
             // Die the normal way WITH a body: the game then makes an ordinary pick-up-able corpse. First the
             // hanging stand-in is removed and the player's body is moved to where it hung, so the real corpse
             // appears there.
@@ -1104,20 +1437,20 @@ namespace SpiderCocoon
             try
             {
                 DeadBodyInfo standIn = state.StandIn != null ? state.StandIn : p.deadBody;
-                if (standIn != null && standIn.bodyParts != null && standIn.bodyParts.Length > 5)
+                // Only when the death will really happen: if another mod or the game blocks it, the player is
+                // freed below and the stand-in must still be there for that.
+                if (p.AllowPlayerDeath() && standIn != null && standIn.bodyParts != null && standIn.bodyParts.Length > 5)
                 {
                     Vector3 hip = standIn.bodyParts[5].transform.position;
-                    BrackenThief.ReleaseCarry(state, standIn);
-                    standIn.attachedTo = null; standIn.attachedLimb = null; standIn.matchPositionExactly = false;
                     p.thisPlayerBody.position = hip - Vector3.up * 1.32f;
                     p.transform.position = p.thisPlayerBody.position;
-                    UnityEngine.Object.Destroy(standIn.gameObject);
+                    DiscardStandIn(state, standIn);
                     if (p.deadBody == standIn) p.deadBody = null;
                     normalBody = true;
                 }
             }
             catch (Exception e) { Plugin.Log.LogWarning("Could not swap the stand-in for a normal body: " + e.Message); }
-            p.KillPlayer(Vector3.zero, normalBody, CauseOfDeath.Mauling, 0);
+            p.KillPlayer(Vector3.zero, normalBody, DeathCause(), 0);
             if (p.isPlayerDead && !normalBody) EnsureCorpseGrabbable(state); // does nothing unless this game is the host
 
             // If something blocked the death (Imperium's god mode, the game's "allow death" switch, another mod),
@@ -1226,7 +1559,7 @@ namespace SpiderCocoon
                 }
                 if (teleportToBody && state.Hung && IsLocal(p))
                 {
-                    MoveVictimUnderBody(p);
+                    MoveVictimUnderBody(p, state.Spider);
                 }
                 BrackenThief.ReleaseCarry(state, p.deadBody);
                 Transform hangPoint = p.deadBody.attachedTo;
@@ -1235,6 +1568,22 @@ namespace SpiderCocoon
                 if (state.Hung && hangPoint != null) DestroyRope(hangPoint);
             }
             Plugin.Log.LogInfo("Player " + id + " released (this is my own player: " + IsLocal(p) + ").");
+            if (IsLocal(p)) CocoonRunner.Run(HinderWatchdog(p));
+        }
+
+        // After a release the player may be left permanently slowed (a web that still thinks it holds them, or a
+        // slow-down nothing is holding). For a few minutes, quietly put that right. Normal webs are left alone.
+        private static IEnumerator HinderWatchdog(PlayerControllerB p)
+        {
+            float end = Time.time + 180f;
+            while (Time.time < end)
+            {
+                yield return new WaitForSeconds(0.5f);
+                if (p == null || p.isPlayerDead) yield break;
+                if (Active.ContainsKey((int)p.playerClientId)) yield break; // wrapped again: the next release restarts this
+                if (p.isMovementHindered <= 0 && Mathf.Abs(p.hinderedMultiplier - 1f) < 0.01f) continue;
+                WebIgnorePatch.FixStuckHindrance(p);
+            }
         }
 
         // Safety net: if a spider stands still while carrying a victim for too long (whatever the
@@ -1341,15 +1690,28 @@ namespace SpiderCocoon
         }
 
         // The freed player's real body is wherever they were hit, so bring them to the cocoon.
-        internal static void MoveVictimUnderBody(PlayerControllerB p)
+        internal static void MoveVictimUnderBody(PlayerControllerB p, SandSpiderAI spider = null)
         {
             try
             {
                 Vector3 pos = p.deadBody.bodyParts[6].transform.position;
+                // The cocoon hangs on the spider's side of the door. If the player went through an entrance
+                // while wrapped (the door was already in use as they collapsed), they must come back to that side.
+                bool inside = (spider != null) ? !spider.isOutside : p.isInsideFactory;
+                if (p.isInsideFactory != inside)
+                {
+                    Plugin.Log.LogInfo("Freed player was on the other side of the door from their cocoon; bringing them back " + (inside ? "inside" : "outside") + ".");
+                    p.isInsideFactory = inside;
+                    if (IsLocal(p) && TimeOfDay.Instance != null)
+                    {
+                        TimeOfDay.Instance.insideLighting = inside;
+                        TimeOfDay.Instance.SetInsideLightingDimness(doNotLerp: true, inside);
+                    }
+                }
                 // Land on the nearest AI node (the points the monsters themselves walk between): they are
                 // always on safe, walkable ground, unlike the floor under a carried cocoon (a pit, say).
                 GameObject[] nodes = RoundManager.Instance != null
-                    ? (p.isInsideFactory ? RoundManager.Instance.insideAINodes : RoundManager.Instance.outsideAINodes)
+                    ? (inside ? RoundManager.Instance.insideAINodes : RoundManager.Instance.outsideAINodes)
                     : null;
                 GameObject bestNode = null;
                 float bestDist = float.MaxValue;
@@ -1364,7 +1726,7 @@ namespace SpiderCocoon
                 }
                 if (bestNode == null)
                 {
-                    Plugin.Log.LogInfo("No AI node found near the cocoon; the hidden player stays where they are.");
+                    Plugin.Log.LogWarning("No AI node found near the cocoon; the hidden player stays where they are.");
                     return;
                 }
                 p.TeleportPlayer(bestNode.transform.position + Vector3.up * 0.3f);
@@ -1376,6 +1738,27 @@ namespace SpiderCocoon
         }
 
         // Removes the web line the body was hanging from.
+        // Removes the hanging stand-in body the clean way: the spider lets go first, a thief puts it down,
+        // and the rope it hung from goes with it (the same steps End() takes).
+        internal static void DiscardStandIn(CocoonState state, DeadBodyInfo body)
+        {
+            if (body == null) return;
+            try
+            {
+                SandSpiderAI spider = state != null ? state.Spider : null;
+                if (spider != null && !spider.isEnemyDead && HeldBodyField.GetValue(spider) == (object)body)
+                {
+                    CancelSpoolingMethod.Invoke(spider, null);
+                    CoroutineField.SetValue(spider, null);
+                }
+                if (state != null) BrackenThief.ReleaseCarry(state, body);
+                Transform hangPoint = body.attachedTo;
+                UnityEngine.Object.Destroy(body.gameObject);
+                if (state != null && state.Hung && hangPoint != null) DestroyRope(hangPoint);
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Could not remove the stand-in body cleanly: " + e.Message); }
+        }
+
         internal static void DestroyRope(Transform hangPoint)
         {
             try
@@ -1514,7 +1897,7 @@ namespace SpiderCocoon
                         // The game made a normal body: the hanging stand-in is no longer needed.
                         if (s.StandIn != null && s.Player != null && s.Player.deadBody != s.StandIn && s.Player.deadBody != null)
                         {
-                            UnityEngine.Object.Destroy(s.StandIn.gameObject);
+                            DiscardStandIn(s, s.StandIn);
                             replaced = true;
                         }
                     }
@@ -1590,7 +1973,7 @@ namespace SpiderCocoon
                     DeadBodyInfo cur = s.Player != null ? s.Player.deadBody : null;
                     if (cur != null && cur != s.StandIn)
                     {
-                        UnityEngine.Object.Destroy(s.StandIn.gameObject);
+                        DiscardStandIn(s, s.StandIn);
                         PendingStandIns.RemoveAt(i);
                     }
                     else if (Time.time > s.StandInDeadline)
@@ -2303,7 +2686,7 @@ namespace SpiderCocoon
 
             if (PlayerNear(chosen.bodyParts[6].transform.position, null))
             {
-                Plugin.Log.LogInfo("Bracken noticed a hung victim but another player is within " + Plugin.BrackenScaredMeters.Value.ToString("F0") + " m of them.");
+                Plugin.Dbg("Bracken noticed a hung victim but another player is within " + Plugin.BrackenScaredMeters.Value.ToString("F0") + " m of them.");
                 return;
             }
             SetClaim(target, b, 2);
@@ -2461,7 +2844,7 @@ namespace SpiderCocoon
             b.movingTowardsTargetPlayer = false;
             if (!b.SetDestinationToPosition(target, true))
             {
-                Plugin.Log.LogInfo("Bracken cannot reach the hung victim.");
+                Plugin.Log.LogWarning("Bracken cannot reach the hung victim.");
                 DropClaim(s, b);
                 l.VictimId = -1;
                 return;
@@ -2523,7 +2906,7 @@ namespace SpiderCocoon
                     s.BrackenDragPoint = dp.transform;
                     grip = dp.transform;
                     dragging = true;
-                    Plugin.Log.LogInfo("Bracken carries the cocoon in '" + style.Trim() + "' style.");
+                    Plugin.Dbg("Bracken carries the cocoon in '" + style.Trim() + "' style.");
                 }
                 body.attachedTo = grip;
                 body.attachedLimb = body.bodyParts[0];
@@ -2654,7 +3037,7 @@ namespace SpiderCocoon
                 {
                     l.HidePos = here;
                     l.Waiting = false;
-                    Plugin.Log.LogInfo("Bracken is already out of sight " + dHere.ToString("F1") + " m from the victim and waits there.");
+                    Plugin.Dbg("Bracken is already out of sight " + dHere.ToString("F1") + " m from the victim and waits there.");
                     return true;
                 }
 
@@ -2683,11 +3066,11 @@ namespace SpiderCocoon
                         {
                             l.HidePos = found[i].Value;
                             l.Waiting = false;
-                            Plugin.Log.LogInfo("Bracken will hide out of sight (" + found.Count + " hiding spots between " + min.ToString("F0") + " and " + max.ToString("F0") + " m) and wait for the spider to finish.");
+                            Plugin.Dbg("Bracken will hide out of sight (" + found.Count + " hiding spots between " + min.ToString("F0") + " and " + max.ToString("F0") + " m) and wait for the spider to finish.");
                             return true;
                         }
                     }
-                    Plugin.Log.LogInfo("Bracken hiding search " + min.ToString("F0") + "-" + max.ToString("F0") + " m: " + inRange + " nodes in range, "
+                    Plugin.Dbg("Bracken hiding search " + min.ToString("F0") + "-" + max.ToString("F0") + " m: " + inRange + " nodes in range, "
                         + seesCocoon + " can see the cocoon, " + seenByPlayer + " can be seen by a player, " + found.Count + " usable but none reachable.");
                 }
                 Plugin.Log.LogInfo("Bracken found no hiding spot near the victim, going straight for it.");
@@ -3298,6 +3681,38 @@ namespace SpiderCocoon
             }
         }
 
+        // Lets go of any web that thinks it is holding the player although they are no longer in it, and then,
+        // if nothing at all is holding them, puts their walking speed back to normal.
+        internal static void FixStuckHindrance(PlayerControllerB p)
+        {
+            try
+            {
+                System.Reflection.MethodInfo leave = AccessTools.Method(typeof(SandSpiderWebTrap), "PlayerLeaveWeb");
+                System.Reflection.FieldInfo hindering = AccessTools.Field(typeof(SandSpiderWebTrap), "hinderingLocalPlayer");
+                if (leave == null || hindering == null) return;
+                bool stillHeld = false;
+                foreach (SandSpiderWebTrap web in UnityEngine.Object.FindObjectsOfType<SandSpiderWebTrap>())
+                {
+                    if (web == null || !(bool)hindering.GetValue(web)) continue;
+                    Collider area = web.GetComponent<Collider>();
+                    bool inside = area != null && p.thisController != null && area.bounds.Intersects(p.thisController.bounds);
+                    if (inside) { stillHeld = true; continue; }
+                    leave.Invoke(web, new object[] { p });
+                    Plugin.Log.LogInfo("Freed the player from a web that was still slowing them after they had left it.");
+                }
+                if (!stillHeld && (p.isMovementHindered != 0 || Mathf.Abs(p.hinderedMultiplier - 1f) > 0.01f))
+                {
+                    Plugin.Log.LogInfo("Walking speed was stuck slow (hindered=" + p.isMovementHindered + ", x" + p.hinderedMultiplier.ToString("0.00") + "); put back to normal.");
+                    p.isMovementHindered = 0;
+                    p.hinderedMultiplier = 1f;
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("Could not check for a stuck slow-down: " + e.Message);
+            }
+        }
+
         // Returns false (skip the game's code) when the thing touching the web is a wrapped-up player's
         // hidden body, so it cannot trip, slow down or alert the spider.
         private static bool Prefix(Collider other)
@@ -3374,10 +3789,13 @@ namespace SpiderCocoon
             // Busy carrying or wrapping someone: a second catch would leave the first victim orphaned.
             if (___currentlyHeldBody != null) return false;
 
+            // Just bit someone: this spider leaves everybody else alone for a while.
+            if (SpiderBiteMemory.OnCooldown(__instance)) return false;
+
             PlayerControllerB player = __instance.MeetsStandardPlayerCollisionConditions(other, ___spoolingPlayerBody);
 
             // Ignore players who are already wrapped up (or just released).
-            if (player != null && !Cocoon.IsCocooned(player) && !Cocoon.IsImmune(player) && ___timeSinceHittingPlayer > 1f)
+            if (player != null && !Cocoon.IsCocooned(player) && !Cocoon.IsVenomed(player) && !Cocoon.IsImmune(player) && ___timeSinceHittingPlayer > 1f)
             {
                 ___timeSinceHittingPlayer = 0f;
                 Plugin.Log.LogInfo("Spider hit intercepted: no damage, cocooning player.");
@@ -3389,8 +3807,56 @@ namespace SpiderCocoon
         }
     }
 
+    // Remembers when each spider last bit someone (every player's game records it from the same network message).
+    internal static class SpiderBiteMemory
+    {
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SandSpiderAI, System.Runtime.CompilerServices.StrongBox<float>> Last
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<SandSpiderAI, System.Runtime.CompilerServices.StrongBox<float>>();
+
+        internal static void Record(SandSpiderAI spider)
+        {
+            if (spider == null) return;
+            System.Runtime.CompilerServices.StrongBox<float> box;
+            if (Last.TryGetValue(spider, out box)) box.Value = Time.time;
+            else Last.Add(spider, new System.Runtime.CompilerServices.StrongBox<float>(Time.time));
+        }
+
+        internal static bool OnCooldown(SandSpiderAI spider)
+        {
+            float cd = Plugin.BiteCooldownSeconds.Value;
+            if (cd <= 0f || spider == null) return false;
+            System.Runtime.CompilerServices.StrongBox<float> box;
+            return Last.TryGetValue(spider, out box) && Time.time - box.Value < cd;
+        }
+    }
+
     // STAGE 2: the game already tells every player's game "the spider hit player X"
     // through this method. We piggyback on it, so no custom networking is needed.
+    // Hitting a monster ends a freed player's immunity. Two entry points cover every game: the hitter's own
+    // game (local hit) and everybody else's (the network message).
+    [HarmonyPatch(typeof(EnemyAI), nameof(EnemyAI.HitEnemyOnLocalClient))]
+    internal static class ImmunityLocalHitPatch
+    {
+        private static void Postfix(PlayerControllerB playerWhoHit)
+        {
+            Cocoon.EndImmunityOnAttack(playerWhoHit);
+        }
+    }
+
+    [HarmonyPatch(typeof(EnemyAI), nameof(EnemyAI.HitEnemyClientRpc))]
+    internal static class ImmunityRemoteHitPatch
+    {
+        private static void Postfix(int playerWhoHit)
+        {
+            try
+            {
+                PlayerControllerB[] players = StartOfRound.Instance.allPlayerScripts;
+                if (playerWhoHit >= 0 && playerWhoHit < players.Length) Cocoon.EndImmunityOnAttack(players[playerWhoHit]);
+            }
+            catch (Exception) { }
+        }
+    }
+
     [HarmonyPatch(typeof(SandSpiderAI), nameof(SandSpiderAI.HitPlayerClientRpc))]
     internal static class SpiderHitSyncPatch
     {
@@ -3400,7 +3866,8 @@ namespace SpiderCocoon
             {
                 PlayerControllerB[] players = StartOfRound.Instance.allPlayerScripts;
                 if (playerId < 0 || playerId >= players.Length) return;
-                Cocoon.Begin(players[playerId], __instance);
+                SpiderBiteMemory.Record(__instance);
+                Cocoon.BeginVenom(players[playerId], __instance);
             }
             catch (Exception e)
             {
@@ -3669,7 +4136,6 @@ namespace SpiderCocoon
                     logged++;
                     Plugin.Dbg("Spider one-shot sound: clip='" + n + "' source='" + __instance.gameObject.name + "' scale=" + volumeScale.ToString("0.00") + " stepLike=" + stepLike);
                 }
-                if (stepLike && !SpiderQuietStepsPatch.IsHandled(__instance)) volumeScale *= Mathf.Clamp01(Plugin.SpiderFootstepVolume.Value);
             }
             catch (Exception) { }
         }
@@ -3701,7 +4167,7 @@ namespace SpiderCocoon
                 CentipedeAI flea = e as CentipedeAI;
                 if (flea == null) return;
                 PlayerControllerB me = GameNetworkManager.Instance != null ? GameNetworkManager.Instance.localPlayerController : null;
-                FieldInfo tf = typeof(CentipedeAI).GetField("triggeredFall", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                FieldInfo tf = TriggeredFallField;
                 if (me == null || tf == null) return;
                 if (Cocoon.IsCocooned(me)) { tf.SetValue(flea, true); FleaHeld.Add(flea); }
                 else if (FleaHeld.Remove(flea)) tf.SetValue(flea, false);
@@ -3710,6 +4176,9 @@ namespace SpiderCocoon
         }
 
         internal static void Prefix(EnemyAI __instance) { HoldFlea(__instance); }
+
+        // Looked up once (this runs every frame for every snare flea).
+        private static readonly FieldInfo TriggeredFallField = typeof(CentipedeAI).GetField("triggeredFall", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
 
         static float nextLog;
         static readonly HashSet<CentipedeAI> FleaHeld = new HashSet<CentipedeAI>();
@@ -3742,6 +4211,8 @@ namespace SpiderCocoon
         {
             public List<AudioSource> Sources = new List<AudioSource>();
             public List<float> BaseVolumes = new List<float>();
+            public List<float> BaseMax = new List<float>();
+            public List<float> BaseMin = new List<float>();
         }
 
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SandSpiderAI, Found> Table
@@ -3772,27 +4243,30 @@ namespace SpiderCocoon
                     {
                         if (fi.FieldType != typeof(AudioSource) || !LooksLikeSteps(fi.Name)) continue;
                         AudioSource a = fi.GetValue(__instance) as AudioSource;
-                        if (a != null && seen.Add(a)) { f.Sources.Add(a); f.BaseVolumes.Add(a.volume); Handled.Add(a); }
+                        if (a != null && seen.Add(a)) { f.Sources.Add(a); f.BaseVolumes.Add(a.volume); f.BaseMax.Add(a.maxDistance); f.BaseMin.Add(a.minDistance); Handled.Add(a); }
                     }
                     // 2. audio sources on the spider whose own name has "foot"/"step" in it
                     foreach (AudioSource a in __instance.GetComponentsInChildren<AudioSource>(true))
                     {
-                        if (a != null && LooksLikeSteps(a.gameObject.name) && seen.Add(a)) { f.Sources.Add(a); f.BaseVolumes.Add(a.volume); Handled.Add(a); }
+                        if (a != null && LooksLikeSteps(a.gameObject.name) && seen.Add(a)) { f.Sources.Add(a); f.BaseVolumes.Add(a.volume); f.BaseMax.Add(a.maxDistance); f.BaseMin.Add(a.minDistance); Handled.Add(a); }
                     }
                     if (Plugin.DebugLogging.Value)
                     {
                         foreach (AudioSource a in __instance.GetComponentsInChildren<AudioSource>(true))
                         {
-                            Plugin.Dbg("Spider audio source: '" + a.gameObject.name + "' volume=" + a.volume.ToString("0.00") +
+                            Plugin.Dbg("Spider audio source: '" + a.gameObject.name + "' volume=" + a.volume.ToString("0.00") + " min=" + a.minDistance.ToString("0.0") + " max=" + a.maxDistance.ToString("0.0") + " rolloff=" + a.rolloffMode + " spatial=" + a.spatialBlend.ToString("0.0") +
                                 " clip=" + (a.clip != null ? a.clip.name : "-") + " quietened=" + seen.Contains(a));
                         }
                     }
-                    Plugin.Log.LogInfo("Spider footsteps: found " + f.Sources.Count + " audio source(s) to turn down.");
+                    Plugin.Dbg("Spider footsteps: found " + f.Sources.Count + " audio source(s) to turn down.");
                 }
-                float mul = Mathf.Clamp01(Plugin.SpiderFootstepVolume.Value);
                 for (int i = 0; i < f.Sources.Count; i++)
                 {
-                    if (f.Sources[i] != null) f.Sources[i].volume = f.BaseVolumes[i] * mul;
+                    if (f.Sources[i] == null) continue;
+                    f.Sources[i].volume = f.BaseVolumes[i];
+                    float range = Mathf.Clamp(Plugin.SpiderFootstepRange.Value, 0.1f, 1f);
+                    f.Sources[i].maxDistance = f.BaseMax[i] * range;
+                    f.Sources[i].minDistance = Mathf.Min(f.BaseMin[i], f.Sources[i].maxDistance);
                 }
             }
             catch (Exception) { }
@@ -3885,7 +4359,7 @@ namespace SpiderCocoon
                     }
                 }
                 dissolveDonor = found;
-                if (found != null) Plugin.Log.LogInfo("Spider dissolve: using the Barber's material '" + found.name + "' (shader " + found.shader.name + ").");
+                if (found != null) Plugin.Dbg("Spider dissolve: using the Barber's material '" + found.name + "' (shader " + found.shader.name + ").");
                 else Plugin.Log.LogWarning("Spider dissolve: the Barber's material is not loaded, using the smooth fade instead.");
             }
             catch (Exception e)
@@ -3959,7 +4433,7 @@ namespace SpiderCocoon
                     }
                 }
                 donor = best;
-                if (donor != null) Plugin.Log.LogInfo("Spider fade: using the game's '" + donor.name + "' as the see-through material.");
+                if (donor != null) Plugin.Dbg("Spider fade: using the game's '" + donor.name + "' as the see-through material.");
                 else Plugin.Log.LogWarning("Spider fade: the game has no suitable see-through material, so the waiting-spider fade is switched off.");
             }
             catch (Exception e)
