@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.9.0
+This is a big update. Spiders are no longer just something you meet indoors, and rescuing a friend now takes thought. Everything below is on by default and can be turned off or tuned in the config (see SETTINGS.md). Everyone in the lobby needs 1.9.0.
+
+**New ways to be caught**
+- **Outdoor spiders:** bunker spiders can now turn up outside the facility (`OutdoorSpawnRarity`). They either ambush from under the ground (trapdoor) or from a tree, or simply stalk you.
+- **Trapdoor ambush:** an outdoor spider sinks under the ground and waits. Walk near it and it bursts out. A victim dragged underground can be dug out by a teammate holding the rescue key (`DigOutSeconds`).
+- **Tree ambush:** an outdoor spider climbs a tree and waits under the branches, then drops on a player who walks beneath it.
+- **Ceiling ambush:** inside the facility a spider may climb to the ceiling, fade out of sight and drop on a player walking underneath (`CeilingSpiders`).
+- **Stalking:** some spiders follow you. They freeze when you look at them, creep closer when you do not, then charge. A stalking spider may also shoot a web line and reel you in like the fox's tongue (`WebPull`).
+- **Fading spiders:** a waiting or stalking spider dissolves out of sight as you turn towards it.
+- **Ceiling strands:** a spider may hang a web strand from the ceiling to the floor across a corridor (`CeilingWebChance`). Webs are also kept apart from each other (`WebMinSpacing`).
+
+**Venom and rescue**
+- **Venom slows the rescuer:** if you are venomed yourself, cutting a friend down takes longer (`VenomedCutMultiplier`, 3x by default), so a bitten player cannot just free everyone before they collapse.
+- **Knife speeds up the rescue:** holding a knife while cutting a friend down takes half the time (`KnifeCutMultiplier`). The prompt shows "(knife)" or "(venom slows you)".
+- **Fighting back:** hit a spider that is carrying a wrapped player and it drops them to come after you. The victim then mashes a key (E by default) to struggle free (`SpiderDropsWhenHit`, `StruggleKey`).
+- **Armed players:** a spider that has bitten a player holding a weapon backs off and stays out of sight until the venom has run its course (`SpiderAvoidsWeapons`).
+- **Venom changes:** the spider only fetches a collapsed victim if it can actually walk to them (`VenomReachMeters`), moves slower while the venom works (`VenomSpiderSlowPercent`), and the sway before the collapse is adjustable (`VenomSway...`, `VenomHeartbeatVolume`).
+- **Wrapped players sound muffled** to everyone else (`MuffleVoices`, `MuffleCutoffHz`, `MuffleResonance`).
+- **Wrapping looks better:** the victim gets extra rolls while the silk goes on (`WrapExtraRolls`).
+
+**Multiplayer fixes**
+- **Cocoons** now hang in the same place on every player's game, and two cocoons no longer clip into each other.
+- **The spider's legs** move smoothly on joining players' games instead of jumping (`SmoothJoinerSpider`).
+- **A web's stuck-sound** no longer keeps looping after the player has left the web.
+- **Fix:** a player who was dropped outdoors by the spider could die unexpectedly.
+- **Fix:** the red venom screen could stay on after the venom had ended.
+- **Web pull:** the web line now snaps when you break line of sight, for example by going round a corner or through a door.
+
+This is a big update with a lot of new behaviour, so some rough edges are likely. If you hit a bug, please [open an issue on GitHub](https://github.com/Militus1/Hung_to_Dry/issues/new/choose) with your log (`BepInEx/LogOutput.log`) and say whether you were the host or a client.
+
 ## 1.8.2
 - **Venom (new, on by default):** a bite no longer wraps you instantly. For `VenomSeconds` (8 s by default) you stumble about slowed and dizzy, with your screen warping and a heartbeat that speeds up (`VenomHeartbeat`). Then you collapse where you stand and the spider walks over, wraps you and hangs you as before. Set `VenomSeconds` to 0 for the old instant wrap. Everyone in the lobby should use the same value. This is new and has had limited multiplayer testing, so reports are welcome.
 - **If the spider dies while the venom is in you,** you still collapse, lie there a moment and recover. If another spider is within `VenomHandoverMeters` (25 m by default, 0 = off), it takes over and wraps you instead.

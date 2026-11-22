@@ -22,6 +22,8 @@
     <!-- BepInEx and Harmony (from your mod profile) -->
     <Reference Include="$(BepInExCore)\BepInEx.dll" Private="false" />
     <Reference Include="$(BepInExCore)\0Harmony.dll" Private="false" />
+    <!-- Optional: LethalConfig (the in-game settings menu). The mod works without it. -->
+    <Reference Include="$(BepInExCore)\..\plugins\AinaVT-LethalConfig\LethalConfig\LethalConfig.dll" Private="false" />
 
     <!-- The game's own code and the Unity / Netcode libraries it uses -->
     <Reference Include="$(GameDir)\Lethal Company_Data\Managed\Assembly-CSharp.dll" Private="false" />

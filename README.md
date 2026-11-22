@@ -9,7 +9,7 @@ Bunker spiders no longer kill you. They **paralyse you, wrap you in silk and han
 - **A countdown starts.** If nobody cuts you down in time, you die in the cocoon.
 - **Rescue a teammate** by standing near their cocoon and holding the cut-down key (E by default).
 
-That's the whole idea. The rest you can find out by playing, and it's more fun that way. Keep an eye on what else is lurking around a hanging victim, and don't assume a spider that has gone quiet has gone away.
+That's the whole idea. The rest you can find out by playing, and it's more fun that way. Keep an eye on what else is lurking around a hanging victim, and don't assume a spider that has gone quiet has gone away. Spiders don't always wait where you expect them, either.
 
 ## Important: multiplayer
 
@@ -24,6 +24,8 @@ Everything can be tuned in `BepInEx/config/Militus.HungToDry.cfg` (it appears af
 | `SecondsHangingBeforeDeath` | 45 | How long a victim lasts in the cocoon |
 | `CutDownSeconds` | 4 | How long you hold the key to free someone |
 | `VenomSeconds` | 8 | Time between the bite and collapsing (0 = wrapped instantly) |
+| `VenomedCutMultiplier` | 3 | How many times longer a venomed player takes to cut a friend down |
+| `KnifeCutMultiplier` | 0.5 | Cutting a friend down while holding a knife takes this share of the time |
 | `ImmunitySeconds` | 10 | How long a rescued player is left alone by monsters |
 | `EmergencyReleaseKey` | false | Turn on to free yourself with F9 if something goes wrong |
 
