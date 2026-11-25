@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace SpiderCocoon
 {
-    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.9.0")]
+    [BepInPlugin("Militus.HungToDry", "Hung to Dry", "1.10.0")]
     [BepInDependency("ainavt.lc.lethalconfig", BepInDependency.DependencyFlags.SoftDependency)]
     public class Plugin : BaseUnityPlugin
     {
@@ -83,9 +83,7 @@ namespace SpiderCocoon
         internal static ConfigEntry<float> DropChaseSeconds;
         internal static ConfigEntry<bool> TrapdoorEnabled;       // outdoor spiders hide under the ground and ambush
         internal static ConfigEntry<float> TrapdoorDepth;
-        internal static ConfigEntry<float> TrapdoorTriggerMeters;
-        internal static ConfigEntry<float> TrapdoorRelocateSeconds;
-        internal static ConfigEntry<float> TrapdoorHoldSeconds;
+        internal static ConfigEntry<float> TrapdoorReleaseSeconds;
         internal static ConfigEntry<float> DigOutSeconds;
         internal static ConfigEntry<bool> CeilingEnabled;
         internal static ConfigEntry<bool> TreeEnabled;
@@ -116,6 +114,10 @@ namespace SpiderCocoon
         internal static ConfigEntry<float> WebOriginForward;
         internal static ConfigEntry<float> WebOriginUp;
         internal static ConfigEntry<float> WebRange;
+        internal static ConfigEntry<float> WebEscapeMeters;
+        internal static ConfigEntry<bool> StalkGrab;
+        internal static ConfigEntry<float> StalkGrabVenomMashPercent;
+        internal static ConfigEntry<float> StalkGrabCooldownSeconds;
         internal static ConfigEntry<float> WebStrength;
         internal static ConfigEntry<float> WebRampSeconds;
         internal static ConfigEntry<float> WebBreakMeters;
@@ -132,11 +134,16 @@ namespace SpiderCocoon
         internal static ConfigEntry<float> CeilingRiseSpeed;
         internal static ConfigEntry<bool> CeilingCloak;
         internal static ConfigEntry<bool> TrapdoorBodyNoCollide;
+        internal static ConfigEntry<bool> TrapdoorBurrowModel;
+        internal static ConfigEntry<string> TrapdoorNoSpawnWeather;
+        internal static ConfigEntry<float> TrapdoorReachMeters, TrapdoorGripRate, TrapdoorMashStep, TrapdoorGripStart;
         internal static ConfigEntry<float> VenomSwaySeconds;
         internal static ConfigEntry<float> VenomReachMeters;
         internal static ConfigEntry<float> VenomSpiderSlowPercent;
         internal static ConfigEntry<float> VenomSwayStrength;
         internal static ConfigEntry<float> VenomSwayStartsAfter;                   // how long the spider hunts the attacker before it goes back for the cocoon
+        internal static ConfigEntry<bool> MaskTrap;
+        internal static ConfigEntry<bool> DeadStayHanging;
         internal static ConfigEntry<float> VenomedCutMultiplier;
         internal static ConfigEntry<float> KnifeCutMultiplier;
         internal static ConfigEntry<float> CutDownSeconds;                      // how long the key must be held
@@ -160,6 +167,9 @@ namespace SpiderCocoon
         internal static ConfigEntry<float> WaitingOpacityPercent;      // how visible it is while waiting (100 = not at all faded)
         internal static ConfigEntry<float> WaitingFadeSeconds;         // how long the fade takes
         internal static ConfigEntry<float> WaitingRevealMeters;        // a player closer than this sees the spider normally
+        internal static ConfigEntry<float> UndergroundViewMeters;
+        internal static ConfigEntry<float> UndergroundLightPercent;
+        internal static ConfigEntry<float> BuriedPortMeters, BuriedPortHeight;            // faint light in the buried pocket              // buried victim's camera: how far they see under the ground
         internal static ConfigEntry<float> LookSensitivity;                   // how fast the mouse turns the cocoon camera
         internal static ConfigEntry<bool> EnableDebugSpawn;                    // testing only: key that spawns a spider
         internal static ConfigEntry<UnityEngine.InputSystem.Key> DebugSpawnKey; // testing only
@@ -226,21 +236,20 @@ namespace SpiderCocoon
             TrapdoorDepth = Config.Bind(
                 "Trapdoor", "TrapdoorDepth", 2.2f,
                 new ConfigDescription("Advanced. How far under the ground (metres) the spider sinks.", new AcceptableValueRange<float>(0.5f, 6f)));
-            TrapdoorTriggerMeters = Config.Bind(
-                "Trapdoor", "TrapdoorTriggerMeters", 6f,
-                new ConfigDescription("Advanced. A player this close to a buried spider makes it burst out and attack.", new AcceptableValueRange<float>(2f, 20f)));
-            TrapdoorRelocateSeconds = Config.Bind(
-                "Trapdoor", "TrapdoorRelocateSeconds", 90f,
-                new ConfigDescription("Advanced. If nobody comes near for this long, the spider climbs out and buries itself somewhere else.", new AcceptableValueRange<float>(15f, 600f)));
-            TrapdoorHoldSeconds = Config.Bind(
-                "Trapdoor", "TrapdoorHoldSeconds", 20f,
-                new ConfigDescription("Advanced. A victim the spider has dragged underground is let go after this many seconds (for testing). The death timer still runs, so keep this below HangSeconds.", new AcceptableValueRange<float>(5f, 120f)));
+            // TrapdoorTriggerMeters and TrapdoorRelocateSeconds (1.9.0) are gone: the spider grabs at
+            // TrapdoorReachMeters and never moves house. TrapdoorHoldSeconds (20, a testing aid) became
+            // TrapdoorReleaseSeconds with 0 = never, under a new name so old config files do not keep the 20.
+            TrapdoorReleaseSeconds = Config.Bind(
+                "Trapdoor", "TrapdoorReleaseSeconds", 0f,
+                new ConfigDescription("Advanced. A victim the spider has dragged underground is let go after this many seconds. 0 = never: they stay buried until a teammate digs them out or the death timer runs out.", new AcceptableValueRange<float>(0f, 300f)));
+            // default outdoor mix decided (was StalkDirectChance 70 / TreeChance 100 = no trapdoor spiders at all);
+            // trip-lines 3 m (was TrapdoorReachMeters 2.5). New key names because every existing cfg has the old values saved.
             TreeEnabled = Config.Bind(
                 "Tree", "TreeSpiders", true,
                 "Advanced. A spider that lives outdoors (for now only the test spawn key makes one) walks to a tree, climbs up under its branches and drops on a player who walks beneath. Spiders that are not chosen for the trees bury themselves instead (see the Trapdoor section).");
             TreeChance = Config.Bind(
-                "Tree", "TreeChance", 100f,
-                new ConfigDescription("Advanced. Percent of outdoor spiders that wait in trees (the rest use the trapdoor ambush). Decided once per spider, the same on every player's game.", new AcceptableValueRange<float>(0f, 100f)));
+                "Tree", "TreeWaitPercent", 70f,
+                new ConfigDescription("Advanced. Of the outdoor spiders that do not stalk directly (StalkDirectPercent), the percent that wait in trees; the rest are trapdoor spiders. Defaults 50 / 70 = about 50 % stalkers, 35 % tree spiders, 15 % trapdoor spiders. Decided once per spider, the same on every player's game.", new AcceptableValueRange<float>(0f, 100f)));
             TreeHeight = Config.Bind(
                 "Tree", "TreeHeight", 16f,
                 new ConfigDescription("Advanced. How high up the trunk (metres) the spider climbs before it waits for someone to pass beneath.", new AcceptableValueRange<float>(2f, 30f)));
@@ -256,8 +265,10 @@ namespace SpiderCocoon
             TreeStalk = Config.Bind(
                 "Stalk", "TreeStalk", true,
                 "Advanced. A spider waiting in a tree that sees a player nearby (who is not looking at it) drops down and stalks them like the Feiopar: it freezes whenever anyone looks at it, creeps closer when nobody does, then charges. Off = it only drops on someone directly beneath it.");
+            // 12 m (was 25: the tree ambush hardly ever happened). New key names for this, TreeCloakPercent and
+            // WebRangeMeters, because every existing cfg has the old values saved; the old lines stay as harmless orphans.
             StalkTriggerMeters = Config.Bind(
-                "Stalk", "StalkTriggerMeters", 25f,
+                "Stalk", "TreeStalkMeters", 12f,
                 new ConfigDescription("Advanced. A player this close (sideways) to the tree, and not looking at the spider, makes it drop and begin stalking.", new AcceptableValueRange<float>(4f, 60f)));
             StalkFootstepPercent = Config.Bind(
                 "Stalk", "StalkFootstepPercent", 5f,
@@ -302,11 +313,11 @@ namespace SpiderCocoon
                 "Stalk", "TreeCloak", true,
                 "Advanced. A spider waiting in a tree or stalking dissolves (down to the Spider WaitingOpacityPercent) as soon as a player starts turning towards it, and becomes solid again once nobody is looking at it.");
             TreeCloakOpacityPercent = Config.Bind(
-                "Stalk", "TreeCloakOpacityPercent", 2f,
+                "Stalk", "TreeCloakPercent", 10f,
                 new ConfigDescription("Advanced. How visible (percent) a stalking or tree-waiting spider is while it is dissolved. 0-2 = almost invisible, 10 = the same as the normal waiting fade.", new AcceptableValueRange<float>(0f, 50f)));
             WebPull = Config.Bind(
                 "Stalk", "WebPull", true,
-                "Advanced. The end of a stalk: instead of charging from afar, the spider shoots a web line at you and reels you in (like the fox's tongue), then bites. Break the line of sight (get behind a wall) or hit the spider to get free. Off = it just charges.");
+                "Advanced. When you try to get away from a stalking spider, it shoots a web line at you and reels you in (like the fox's tongue), then grabs and bites you (see StalkGrab). Snap the line, break the line of sight (get behind a wall) or hit the spider to get loose, but it then charges after you. Off = it just charges.");
             WebEvenIfWatched = Config.Bind(
                 "Testing", "WebEvenIfWatched", false,
                 "Testing only: the spider shoots its web even while you are looking straight at it (normally it only shoots when nobody is looking), so you can see where the line comes from.");
@@ -316,9 +327,23 @@ namespace SpiderCocoon
             WebOriginUp = Config.Bind(
                 "Stalk", "WebOriginUp", 0.1f,
                 new ConfigDescription("Advanced. How high (metres) above the abdomen the web line starts. Negative = lower (the underside of the abdomen, the default).", new AcceptableValueRange<float>(-1.5f, 2f)));
+            // the web pull is now the spider's answer to a target GETTING AWAY, not an opening shot.
+            // New key names (WebRangeMeters 5 and WebAfterSeconds were dev-only and are saved in test configs).
             WebRange = Config.Bind(
-                "Stalk", "WebRange", 8f,
-                new ConfigDescription("Advanced. A stalking spider this close (and with a clear line to you, and nobody looking at it) shoots its web.", new AcceptableValueRange<float>(4f, 20f)));
+                "Stalk", "WebMaxMeters", 10f,
+                new ConfigDescription("Advanced. The furthest a stalking spider shoots its web (keep it below WebBreakMeters, or the line snaps at once).", new AcceptableValueRange<float>(4f, 30f)));
+            WebEscapeMeters = Config.Bind(
+                "Stalk", "WebEscapeMeters", 7f,
+                new ConfigDescription("Advanced. A stalked player who gets at least this far away, and 2.5 m further than the spider had got to them, is reeled back in with its web (clear line, nobody looking at the spider).", new AcceptableValueRange<float>(3.5f, 25f)));
+            StalkGrab = Config.Bind(
+                "Stalk", "StalkGrab", true,
+                "When the web reels you in, the spider grabs you and bites at once: a tug-of-war (mash the struggle key) while the venom works. Fill its grip and it wraps you on the spot; break free and it lets go for a while (you are still venomed: get far away before it wears off). Off = it just moves in to bite.");
+            StalkGrabVenomMashPercent = Config.Bind(
+                "Stalk", "StalkGrabVenomMashPercent", 60f,
+                new ConfigDescription("Advanced. How much each struggle press counts in a stalking spider's grab while its venom is in you, compared with fighting a trapdoor spider (100 = the same). Lower = harder to break free.", new AcceptableValueRange<float>(10f, 100f)));
+            StalkGrabCooldownSeconds = Config.Bind(
+                "Stalk", "StalkGrabCooldownSeconds", 10f,
+                new ConfigDescription("Advanced. After you break free of a stalking spider's grab (or it is made to let go), how many seconds it leaves you alone before it can chase, stalk or web you again.", new AcceptableValueRange<float>(0f, 60f)));
             WebBreakMeters = Config.Bind(
                 "Stalk", "WebBreakMeters", 12f,
                 new ConfigDescription("Advanced. The web line snaps if you get this far (metres) from the spider while it is pulling you. It shoots from at most WebRange, so this is how far you can stretch it. Lower = easier to escape.", new AcceptableValueRange<float>(6f, 40f)));
@@ -341,8 +366,8 @@ namespace SpiderCocoon
                 "Stalk", "TreeCloakAngle", 90f,
                 new ConfigDescription("Advanced. How close to the centre of a player's view (degrees) the spider must be for it to dissolve. The spider freezes at 67, so a bigger number (the default is 90) makes it dissolve before it freezes, so it dissolves as soon as you start turning towards it. Smaller = it only dissolves when you look almost straight at it.", new AcceptableValueRange<float>(5f, 120f)));
             StalkDirectChance = Config.Bind(
-                "Stalk", "StalkDirectChance", 70f,
-                new ConfigDescription("Advanced. Percent of outdoor spiders that roam and stalk players directly, with no tree. The rest wait in trees first (TreeChance). Decided once per spider, the same on every player's game.", new AcceptableValueRange<float>(0f, 100f)));
+                "Stalk", "StalkDirectPercent", 50f,
+                new ConfigDescription("Advanced. Percent of outdoor spiders that roam and stalk players directly, with no tree. Of the rest, TreeWaitPercent wait in trees and the others are trapdoor spiders. Decided once per spider, the same on every player's game.", new AcceptableValueRange<float>(0f, 100f)));
             OutdoorSpawnRarity = Config.Bind(
                 "Spawning", "OutdoorSpawnRarity", 20f,
                 new ConfigDescription("Advanced. How often bunker spiders are picked as outdoor monsters, compared with the other outdoor monsters (the game's own outdoor monsters use numbers from about 5 to 30). 0 = spiders only spawn inside, as in the normal game. Only the host's setting matters.", new AcceptableValueRange<float>(0f, 200f)));
@@ -361,8 +386,10 @@ namespace SpiderCocoon
             CeilingRelocateSeconds = Config.Bind(
                 "Ceiling", "CeilingRelocateSeconds", 90f,
                 new ConfigDescription("Advanced. If nobody comes underneath for this long, the spider comes down and picks another spot.", new AcceptableValueRange<float>(15f, 600f)));
+            // on by default. New key name on purpose: every existing cfg has CeilingCloak = false saved,
+            // so the old key would have kept it off for everyone who already has the mod. The old line stays as an orphan.
             CeilingCloak = Config.Bind(
-                "Ceiling", "CeilingCloak", false,
+                "Ceiling", "CeilingCloakOn", true,
                 "Advanced. On: the spider dissolves like the waiting spider (down to the Spider WaitingOpacityPercent) as it reaches the ceiling, but is never fully invisible. Off: it stays fully solid up there.");
             CeilingRiseSpeed = Config.Bind(
                 "Ceiling", "CeilingRiseSpeed", 3f,
@@ -370,12 +397,36 @@ namespace SpiderCocoon
             DigOutSeconds = Config.Bind(
                 "Trapdoor", "DigOutSeconds", 6f,
                 new ConfigDescription("Advanced. How many seconds a teammate must hold the rescue key at the disturbed earth to dig a buried victim out. The spider comes back up to defend them.", new AcceptableValueRange<float>(1f, 30f)));
+            TrapdoorReachMeters = Config.Bind(
+                "Trapdoor", "TrapdoorTripLineMeters", 3f,
+                new ConfigDescription("Advanced. How far the trapdoor spider's silk trip-lines reach from its lid: a player this close is grabbed.", new AcceptableValueRange<float>(1f, 6f)));
+            TrapdoorGripRate = Config.Bind(
+                "Trapdoor", "TrapdoorGripRate", 0.2f,
+                new ConfigDescription("Advanced. How fast the trapdoor spider's grip tightens by itself (share of the bar per second). Full grip = dragged under.", new AcceptableValueRange<float>(0.02f, 1f)));
+            TrapdoorMashStep = Config.Bind(
+                "Trapdoor", "TrapdoorMashStep", 0.07f,
+                new ConfigDescription("Advanced. How much each press of the struggle key loosens the trapdoor spider's grip. No grip = you break free.", new AcceptableValueRange<float>(0.01f, 0.5f)));
+            TrapdoorGripStart = Config.Bind(
+                "Trapdoor", "TrapdoorGripStart", 0.3f,
+                new ConfigDescription("Advanced. How tight the grip is the moment the trapdoor spider grabs you.", new AcceptableValueRange<float>(0.05f, 0.9f)));
+            TrapdoorNoSpawnWeather = Config.Bind(
+                "Trapdoor", "TrapdoorNoSpawnWeather", "Rainy, Stormy, Flooded",
+                "Advanced. Weathers in which there are no trapdoor spiders (a burrow would be under water or mud): the spiders that would have been trapdoor spiders stalk instead. Comma-separated: None, DustClouds, Rainy, Stormy, Foggy, Flooded, Eclipsed. Empty = any weather.");
+            TrapdoorBurrowModel = Config.Bind(
+                "Trapdoor", "TrapdoorBurrowModel", true,
+                "Advanced. Build the burrow from the model file trapdoor_burrow.obj next to the mod (lid, earth rim, a vertical tunnel with a silk lining and roots, seen when you are buried). Off, or the file missing: the simple burrow made in code.");
             TrapdoorBodyNoCollide = Config.Bind(
                 "Trapdoor", "TrapdoorBodyNoCollide", true,
                 "Advanced. While the spider drags a victim underground, switch off every collider and collision on the stand-in body so the ground cannot stop it. The log (lines starting 'Cocoon dump') shows what was blocking it either way.");
             CutDownSeconds = Config.Bind(
                 "Rescue", "CutDownSeconds", 4f,
                 "How many seconds the key must be held to cut a victim down.");
+            DeadStayHanging = Config.Bind(
+                "Cocoon", "DeadStayHanging", true,
+                "When the timer runs out the victim dies but the cocoon stays hanging; the body only appears (and can be picked up) once a teammate cuts the cocoon open. Off = the body drops straight away as before.");
+            MaskTrap = Config.Bind(
+                "Mask", "MaskTrap", true,
+                "Advanced. A player wrapped while a haunted mask is taking them over is not saved by it: the first time a teammate cuts the cocoon open, the mask finishes the takeover. The player dies and a Masked enemy that looks like them bursts out.");
             VenomedCutMultiplier = Config.Bind(
                 "Rescue", "VenomedCutMultiplier", 3f,
                 new ConfigDescription("While you are venomed (bitten, but not yet wrapped) cutting a friend down takes this many times longer, as your muscles stop obeying you. 1 = no change.",
@@ -607,6 +658,18 @@ namespace SpiderCocoon
             WaitingRevealMeters = Config.Bind(
                 "Spider", "WaitingRevealMeters", 1f,
                 "A player closer to the waiting spider than this many metres sees it normally. Set 0 to never reveal it.");
+            UndergroundViewMeters = Config.Bind(
+                "Camera", "UndergroundViewMeters", 2.5f,
+                new ConfigDescription("While a trapdoor spider has you buried, your camera only sees this many metres once it is under the ground; beyond that it is dark (otherwise you see straight through the ground to the whole map). 0 = off.", new AcceptableValueRange<float>(0f, 20f)));
+            UndergroundLightPercent = Config.Bind(
+                "Camera", "UndergroundLightPercent", 25f,
+                new ConfigDescription("While buried (see UndergroundViewMeters), a faint light in the pocket so your cocoon and the spider are dimly visible instead of black shapes. Percent of the game's own night-vision light. 0 = pitch dark.", new AcceptableValueRange<float>(0f, 200f)));
+            BuriedPortMeters = Config.Bind(
+                "Camera", "BuriedPortMeters", 2.4f,
+                new ConfigDescription("Buried in a trapdoor burrow (model): how far from the tunnel's middle your camera looks in from, like a viewing port in the tunnel's side.", new AcceptableValueRange<float>(1f, 5f)));
+            BuriedPortHeight = Config.Bind(
+                "Camera", "BuriedPortHeight", 0.6f,
+                new ConfigDescription("Buried in a trapdoor burrow (model): how far above your cocoon's middle the viewing port is.", new AcceptableValueRange<float>(-1.5f, 2f)));
             LookSensitivity = Config.Bind(
                 "Camera", "LookSensitivity", 0.12f,
                 "How fast the mouse turns the camera while you are wrapped up. Mouse wheel zooms in and out.");
@@ -770,7 +833,7 @@ namespace SpiderCocoon
             {
                 Log.LogWarning("Could not patch monster targeting: " + e.Message);
             }
-            Log.LogInfo("Hung to Dry 1.9.0 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
+            Log.LogInfo("Hung to Dry 1.10.0 loaded (spider camera, death timer, cut-down rescue, anti-stall).");
         }
     }
 
@@ -878,7 +941,7 @@ namespace SpiderCocoon
             foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
             {
                 CocoonState s = kv.Value;
-                if (!s.Hung || s.Player == null || !Cocoon.IsLocal(s.Player) || s.Player.deadBody == null) continue;
+                if (!s.Hung || s.Player == null || s.Player.isPlayerDead || !Cocoon.IsLocal(s.Player) || s.Player.deadBody == null) continue;
                 Transform part = s.Player.deadBody.bodyParts != null && s.Player.deadBody.bodyParts.Length > 6 ? s.Player.deadBody.bodyParts[6].transform : null;
                 if (part == null) continue;
                 Vector3 a = s.Player.transform.position, b2 = part.position;
@@ -927,6 +990,7 @@ namespace SpiderCocoon
             Cocoon.TickVenomCleanup();
             Cocoon.TickCorpseDump();
             Cocoon.TickStandIns();
+            TrapdoorBurrow.TickAll();
             CocoonNet.EnsureRegistered();
             ConfigSync.Tick();
             SoundDebug.Tick();
@@ -935,6 +999,7 @@ namespace SpiderCocoon
             DepthSync.Tick();
             Cocoon.WatchSpiders();
             Cocoon.TickStruggle();
+            TrapdoorGrip.TickLocal();
         }
 
         private void LateUpdate()
@@ -1312,6 +1377,11 @@ namespace SpiderCocoon
         public bool RegrabActive;    // a go-back-for-the-cocoon routine is already running for this victim
         public bool NoLiveSpider;    // wrapped with no living spider to carry them (venom took hold after the spider died): they just recover
         public float StruggleProgress; // 0..1, only used on the victim's own game
+        public bool MaskTrap;        // wrapped with a haunted mask on: the first cut-down springs a Masked enemy
+        public bool MaskSprung;      // that Masked enemy has been spawned
+        public float DeadSeenAt = -1f; // when this game first noticed the (hanging) victim was dead
+        public bool Dormant;         // the timer ran out: the victim is dead but the cocoon stays, the Masked waiting inside
+        public int MaskTypeId;       // which mask (comedy / tragedy) it was
         public bool Buried;          // a trapdoor spider dragged this victim underground at DigSpot
         public bool Ghosted;         // the real body has been moved to the cocoon once already
         public Vector3 GhostFor;     // where the cocoon was when that happened
@@ -1337,6 +1407,15 @@ namespace SpiderCocoon
         private static readonly Dictionary<int, CocoonState> Active = new Dictionary<int, CocoonState>();
         private static readonly Dictionary<int, float> ImmuneUntil = new Dictionary<int, float>();
         internal static Dictionary<int, CocoonState> ActiveStates { get { return Active; } }
+
+        // the cocoon still exists, living (Active) or dead but kept until opened (Dormants, DeadStayHanging).
+        internal static bool StillThere(CocoonState st)
+        {
+            if (st == null) return false;
+            foreach (CocoonState a in Active.Values) if (a == st) return true;
+            foreach (CocoonState d in Dormants.Values) if (d == st) return true;
+            return false;
+        }
 
         // The spider keeps these private, so we reach them through reflection.
         private static readonly MethodInfo GrabBodyMethod = AccessTools.Method(typeof(SandSpiderAI), "GrabBody");
@@ -1403,6 +1482,28 @@ namespace SpiderCocoon
         }
 
         // True while this spider still has a victim: bitten and stumbling, wrapped, hanging or buried.
+        // True on the game of the local player when this spider has them buried (wrapped and dragged under).
+        public static bool LocalBuriedBy(SandSpiderAI spider)
+        {
+            if (spider == null) return false;
+            PlayerControllerB me = GameNetworkManager.Instance != null ? GameNetworkManager.Instance.localPlayerController : null;
+            if (me == null) return false;
+            CocoonState st;
+            return Active.TryGetValue((int)me.playerClientId, out st) && st != null && st.Buried && st.Spider == spider;
+        }
+
+        // The living player this spider's venom is working in right now (null if none).
+        public static PlayerControllerB VenomVictimOf(SandSpiderAI spider)
+        {
+            if (spider == null) return null;
+            PlayerControllerB[] ps = StartOfRound.Instance != null ? StartOfRound.Instance.allPlayerScripts : null;
+            if (ps == null) return null;
+            foreach (KeyValuePair<int, SandSpiderAI> kv in VenomSpider)
+                if (kv.Value == spider && Venomed.Contains(kv.Key) && kv.Key >= 0 && kv.Key < ps.Length && ps[kv.Key] != null && !ps[kv.Key].isPlayerDead)
+                    return ps[kv.Key];
+            return null;
+        }
+
         public static bool SpiderHasVictim(SandSpiderAI spider)
         {
             if (spider == null) return false;
@@ -1561,7 +1662,7 @@ namespace SpiderCocoon
         {
             int id = (int)victim.playerClientId;
             bool local = IsLocal(victim);
-            Plugin.Log.LogInfo("Player " + id + ": the spider died but the venom has taken hold; collapsing, then recovering.");
+            Plugin.Log.LogInfo("Player " + id + ": " + (spider == null || spider.isEnemyDead ? "the spider died" : "the spider is not coming for them") + " but the venom has taken hold; collapsing, then recovering.");
             SandSpiderAI heir = FindHeir(victim, spider);
             if (heir != null)
             {
@@ -1737,6 +1838,7 @@ namespace SpiderCocoon
             bool finished = false;
             bool spiderDied = false;
             bool caught = false;
+            bool wrappedEarly = false;
             string caughtBy = null;
             try
             {
@@ -1749,6 +1851,7 @@ namespace SpiderCocoon
                 while (t < secs)
                 {
                     if (victim == null || victim.isPlayerDead) yield break;
+                    if (Active.ContainsKey(id)) { wrappedEarly = true; yield break; } // already wrapped (a stalker won its grab): nothing left for the venom to do
                     if (ForceCollapseIds.Remove(id)) { Plugin.Log.LogInfo("Debug key: collapsing player " + id + " from the venom now."); break; }
                     if (spider == null || spider.isEnemyDead) spiderDied = true; // the venom is already in them: it still runs its course
                     if (local) { ApplyVenomLook(victim, Mathf.Clamp01(t / secs)); VenomTimerLeft = secs - t; ApplyVenomSway(victim, secs - t, t, secs); }
@@ -1785,10 +1888,17 @@ namespace SpiderCocoon
                 Venomed.Remove(id);
                 if (local) VenomTimerLeft = -1f;
                 if (spiderDied && victim != null && !victim.isPlayerDead) CocoonRunner.Run(VenomCollapse(victim, spider)); // killed the spider: drops anyway
-                if (!finished) Plugin.Log.LogInfo("Player " + id + ": the venom wore off (spider dead or player gone).");
+                if (wrappedEarly) Plugin.Log.LogInfo("Player " + id + " was wrapped while the venom was still working: the venom stops.");
+                else if (!finished) Plugin.Log.LogInfo("Player " + id + ": the venom wore off (spider dead or player gone).");
                 if (local && victim != null)
                 {
-                    if (spiderDied && !victim.isPlayerDead) { /* the collapse routine keeps the effect going */ }
+                    if (wrappedEarly)
+                    {
+                        victim.overridePoisonValue = false;
+                        victim.poison = 0f;
+                        if (HUDManager.Instance != null) HUDManager.Instance.cadaverFilter = 0f;
+                    }
+                    else if (spiderDied && !victim.isPlayerDead) { /* the collapse routine keeps the effect going */ }
                     else if (!finished && !victim.isPlayerDead) CocoonRunner.Run(VenomFade(victim, ++VenomEpoch, 6f)); // wears off slowly
                     else
                     {
@@ -1973,6 +2083,8 @@ namespace SpiderCocoon
 
             CocoonState state = new CocoonState { Player = victim, Spider = spider, BeganAt = Time.time, NoLiveSpider = (spider == null || spider.isEnemyDead) };
             Active[id] = state;
+            int maskType;
+            if (Plugin.MaskTrap.Value && MaskCancel.Detect(victim, out maskType)) { state.MaskTrap = true; state.MaskTypeId = maskType; Plugin.Log.LogInfo("Player " + id + " was wrapped with a mask on: cutting them down will spring a Masked enemy."); }
             MaskCancel.Run(victim);
 
             // Diagnostic for the "caught again straight after a rescue" question.
@@ -2267,6 +2379,7 @@ namespace SpiderCocoon
             if (!Active.TryGetValue(id, out current) || current != owner) yield break;
             try
             {
+                if (current.Hung && (Plugin.DeadStayHanging.Value || (current.MaskTrap && !current.MaskSprung && Plugin.MaskTrap.Value))) { DormantDeath(id); yield break; }
                 Kill(id);
             }
             catch (Exception e)
@@ -2277,7 +2390,7 @@ namespace SpiderCocoon
 
         // Only the victim's own game kills them. Everyone else's game learns about it
         // from the game's normal death message, and RemoveDeadVictims() tidies up.
-        public static void Kill(int id)
+        public static void Kill(int id, int maskTypeId = 0)
         {
             CocoonState state;
             if (!Active.TryGetValue(id, out state)) return;
@@ -2313,7 +2426,7 @@ namespace SpiderCocoon
                 }
             }
             catch (Exception e) { Plugin.Log.LogWarning("Could not swap the stand-in for a normal body: " + e.Message); }
-            p.KillPlayer(Vector3.zero, normalBody, DeathCause(), 0);
+            p.KillPlayer(Vector3.zero, normalBody, DeathCause(), maskTypeId);
             if (p.isPlayerDead && !normalBody) EnsureCorpseGrabbable(state); // does nothing unless this game is the host
 
             // If something blocked the death (Imperium's god mode, the game's "allow death" switch, another mod),
@@ -2350,8 +2463,75 @@ namespace SpiderCocoon
             }
         }
 
+        // A mask-trapped victim was cut down: the mask finishes what it started. Only the victim's own game does the killing.
+        // Dead-but-still-hanging cocoons. Kept apart from Active so none of the code that assumes a living victim ever sees them.
+        internal static readonly Dictionary<int, CocoonState> Dormants = new Dictionary<int, CocoonState>();
+
+        // Moves a hanging victim from the live list to the dormant list (the cocoon stays, the victim is dead or about to be).
+        internal static bool DormantMove(int id)
+        {
+            CocoonState s;
+            if (!Active.TryGetValue(id, out s)) return false;
+            s.Dormant = true;
+            Active.Remove(id);
+            Dormants[id] = s;
+            return true;
+        }
+
+        // The 45 seconds ran out (and DeadStayHanging is on, or a mask is on them): the victim dies, but the cocoon stays hanging
+        // until somebody cuts it open. Every game's own timer ends up here, but only the victim's game kills them, and it tells
+        // the other games first (their hang timers run a few seconds off, so they may see the death before their own timer fires).
+        internal static void DormantDeath(int id)
+        {
+            CocoonState s;
+            if (!Active.TryGetValue(id, out s)) return;
+            bool mask = s.MaskTrap && !s.MaskSprung;
+            DormantMove(id);
+            PlayerControllerB p = s.Player;
+            Plugin.Log.LogInfo("Player " + id + "'s time ran out: they die and the cocoon stays hanging until it is cut open" + (mask ? " (the Masked waits inside)." : "."));
+            if (!IsLocal(p)) return;
+            CocoonNet.RequestDormant(id);
+            StopCamera(s, false);
+            p.disableMoveInput = false;
+            p.disableLookInput = false;
+            p.KillPlayer(Vector3.zero, false, DeathCause(), s.MaskTypeId);
+        }
+
+        // Somebody cut open a dormant cocoon that held a Masked: the cocoon and the body go, the Masked takes their place (set up by MaskTrap).
+        internal static void OpenDormant(int id)
+        {
+            CocoonState s;
+            if (!Dormants.TryGetValue(id, out s)) return;
+            s.MaskSprung = true;
+            Dormants.Remove(id);
+            try { if (s.Player != null && s.Player.deadBody != null) s.Player.deadBody.DeactivateBody(false); } catch (Exception) { }
+            try { if (s.StandIn != null) DiscardStandIn(s, s.StandIn); } catch (Exception) { }
+        }
+
+        // Somebody cut open a dormant cocoon with nothing special inside: it goes back to the normal "dead victim" tidy-up, which frees the corpse.
+        private static bool OpenDormantPlain(int id)
+        {
+            CocoonState s;
+            if (!Dormants.TryGetValue(id, out s)) return false;
+            Dormants.Remove(id);
+            s.Dormant = false;
+            Active[id] = s;
+            Plugin.Log.LogInfo("Player " + id + "'s cocoon was cut open: the body is freed.");
+            return true;
+        }
+
+        internal static void MaskDeath(int id)
+        {
+            if (Dormants.ContainsKey(id)) { OpenDormant(id); return; }
+            CocoonState s;
+            if (!Active.TryGetValue(id, out s)) return;
+            s.MaskSprung = true;
+            if (IsLocal(s.Player)) Kill(id, s.MaskTypeId);
+        }
+
         public static void EndAll()
         {
+            Dormants.Clear();
             foreach (int id in new List<int>(Active.Keys))
             {
                 End(id);
@@ -2496,13 +2676,20 @@ namespace SpiderCocoon
         private static IEnumerator HinderWatchdog(PlayerControllerB p)
         {
             float end = Time.time + 180f;
+            float slowSince = -1f;
             while (Time.time < end)
             {
                 yield return new WaitForSeconds(0.5f);
                 if (p == null || p.isPlayerDead) yield break;
                 if (Active.ContainsKey((int)p.playerClientId)) yield break; // wrapped again: the next release restarts this
-                if (p.isMovementHindered <= 0 && Mathf.Abs(p.hinderedMultiplier - 1f) < 0.01f) continue;
+                if (p.isMovementHindered <= 0 && Mathf.Abs(p.hinderedMultiplier - 1f) < 0.01f) { slowSince = -1f; continue; }
+                // Quicksand, water and Cadaver Bloom slow the player on purpose: leave those alone.
+                if (WebIgnorePatch.SlowedByGame(p)) { slowSince = -1f; continue; }
+                // Short slow-downs (a zap gun shock, say) end by themselves: only step in once it has lasted a while.
+                if (slowSince < 0f) slowSince = Time.time;
+                if (Time.time - slowSince < 5f) continue;
                 WebIgnorePatch.FixStuckHindrance(p);
+                slowSince = -1f;
             }
         }
 
@@ -2805,8 +2992,13 @@ namespace SpiderCocoon
         // Runs on EVERY player's game when someone finishes cutting a victim down.
         public static void ApplyRelease(int id)
         {
+            if (OpenDormantPlain(id)) return;
             CocoonState s;
             if (!Active.TryGetValue(id, out s)) return;
+            // A dead victim is not "cut down" alive: the dead-victim tidy-up (RemoveDeadVictims) frees the corpse and makes it
+            // pick-up-able. (The host gets each release twice, its own call plus its own broadcast; after a dormant cocoon was
+            // opened the second one used to land here and skip the pick-up object.)
+            if (s.Player != null && s.Player.isPlayerDead) return;
             Plugin.Log.LogInfo("Player " + id + " was cut down.");
             End(id, true);
         }
@@ -2966,6 +3158,7 @@ namespace SpiderCocoon
         public static void UpdateRescue()
         {
             Trapdoor.TidyMarkers();
+            Trapdoor.KeepUpright();
             GameNetworkManager gnm = GameNetworkManager.Instance;
             PlayerControllerB me = gnm != null ? gnm.localPlayerController : null;
             if (me == null) return;
@@ -3002,6 +3195,19 @@ namespace SpiderCocoon
                         best = d;
                         target = kv.Key;
                     }
+                }
+            }
+
+            if (target < 0 && canAct && Dormants.Count > 0)
+            {
+                float bestD = RescueRange;
+                Vector3 eyeD = me.gameplayCamera.transform.position;
+                foreach (KeyValuePair<int, CocoonState> kv in Dormants)
+                {
+                    DeadBodyInfo body = kv.Value.StandIn;
+                    if (body == null || body.bodyParts == null || body.bodyParts.Length <= 6) continue;
+                    float d = Vector3.Distance(eyeD, body.bodyParts[6].transform.position);
+                    if (d < bestD) { bestD = d; target = kv.Key; }
                 }
             }
 
@@ -3046,7 +3252,7 @@ namespace SpiderCocoon
                 cutTarget = -1;
                 lastRequestTime = Time.time;
                 Plugin.Log.LogInfo("Cutting down player " + target);
-                CocoonNet.RequestRelease(target);
+                CocoonNet.RequestRelease(target, true);
             }
         }
 
@@ -3075,6 +3281,12 @@ namespace SpiderCocoon
             foreach (int id in new List<int>(Active.Keys))
             {
                 CocoonState s = Active[id];
+                if (s.Dormant) continue; // dead on purpose: the cocoon stays until it is opened
+                if (s.Hung && s.Player != null && s.Player.isPlayerDead && (Plugin.DeadStayHanging.Value || (s.MaskTrap && !s.MaskSprung && Plugin.MaskTrap.Value)))
+                {
+                    if (s.DeadSeenAt < 0f) s.DeadSeenAt = Time.time;
+                    if (Time.time - s.DeadSeenAt < 2f) continue; // the victim's game may still be telling us "my cocoon stays hanging"
+                }
                 if (s.Player == null || s.Player.isPlayerDead)
                 {
                     StopCamera(s, false);
@@ -3114,6 +3326,7 @@ namespace SpiderCocoon
                             db.canBeGrabbedBackByPlayers = true;
                             if (db.attachedTo != null && db.grabBodyObject == null) { db.attachedTo = null; db.attachedLimb = null; db.matchPositionExactly = false; }
                             db.gameObject.SetActive(true);
+                            SurfaceIfBuried(s, db);
                         }
                     }
                     catch (Exception e) { Plugin.Log.LogWarning("Could not free the corpse: " + e.Message); }
@@ -3191,6 +3404,7 @@ namespace SpiderCocoon
                         {
                             cur.canBeGrabbedBackByPlayers = true;
                             if (cur.attachedTo != null && cur.grabBodyObject == null) { cur.attachedTo = null; cur.attachedLimb = null; cur.matchPositionExactly = false; }
+                            SurfaceIfBuried(s, cur);
                         }
                         EnsureCorpseGrabbable(s);
                     }
@@ -3235,6 +3449,58 @@ namespace SpiderCocoon
                 catch (Exception) { }
             }
             return sb.ToString();
+        }
+
+        // a trapdoor victim who died BURIED (DeadStayHanging kept them in the burrow until dug out) has its body's
+        // collisions switched off (so it could be dragged through the ground). Freed like that it fell out of the world
+        // (seen at y -5900). Lift it to the surface at the burial spot and give it its collisions back. Every game.
+        private static readonly HashSet<DeadBodyInfo> Surfaced = new HashSet<DeadBodyInfo>();
+        internal static void SurfaceIfBuried(CocoonState s, DeadBodyInfo b)
+        {
+            if (s == null || b == null || !s.Buried || b.bodyParts == null) return;
+            Surfaced.RemoveWhere(x => x == null);
+            if (!Surfaced.Add(b)) return; // once per body
+            CocoonRunner.Run(SurfaceBody(s, b));
+        }
+
+        // move the ragdoll FROZEN (kinematic) and only then let it go at zero speed; shifting a live ragdoll made its
+        // joints snap and fling it (seen at y +218 / +4150).
+        private static IEnumerator SurfaceBody(CocoonState s, DeadBodyInfo b)
+        {
+            List<Rigidbody> parts = new List<Rigidbody>();
+            try
+            {
+                foreach (Rigidbody rb in b.bodyParts) if (rb != null) parts.Add(rb);
+                Rigidbody root = b.GetComponent<Rigidbody>(); if (root != null && !parts.Contains(root)) parts.Add(root);
+                foreach (Rigidbody rb in parts) { rb.isKinematic = true; rb.detectCollisions = false; }
+                Transform pivot = b.bodyParts.Length > 6 && b.bodyParts[6] != null ? b.bodyParts[6].transform : b.transform;
+                Vector3 off = (s.DigSpot + Vector3.up * 0.6f) - pivot.position;
+                float low = float.MaxValue;
+                foreach (Rigidbody rb in b.bodyParts) if (rb != null) low = Mathf.Min(low, rb.transform.position.y + off.y);
+                if (low < s.DigSpot.y + 0.3f) off.y += (s.DigSpot.y + 0.3f) - low;
+                Dictionary<Rigidbody, Vector3> to = new Dictionary<Rigidbody, Vector3>();
+                foreach (Rigidbody rb in parts) to[rb] = rb.transform.position + off;
+                foreach (Rigidbody rb in parts) { rb.transform.position = to[rb]; rb.position = to[rb]; }
+                Physics.SyncTransforms();
+                Plugin.Log.LogInfo("Player " + s.Player.playerClientId + "'s body was buried: brought up to the surface at " + s.DigSpot.ToString("F1") + ".");
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Could not bring the buried body up: " + e.Message); yield break; }
+            yield return new WaitForSeconds(0.3f);
+            try
+            {
+                foreach (Rigidbody rb in parts)
+                {
+                    if (rb == null) continue;
+                    if (b != null && rb == b.attachedLimb && b.attachedTo != null) continue; // still held by something: leave it
+                    if (b != null && b.grabBodyObject != null && b.grabBodyObject.isHeld) break; // a player already picked it up
+                    rb.isKinematic = false;
+                    rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero;
+                    rb.maxDepenetrationVelocity = 1f;
+                    rb.detectCollisions = true;
+                    Collider c = rb.GetComponent<Collider>(); if (c != null) c.enabled = true;
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Could not settle the buried body: " + e.Message); }
         }
 
         private static void EnsureCorpseGrabbable(CocoonState s)
@@ -3320,6 +3586,7 @@ namespace SpiderCocoon
         {
             if (!s.CameraActive) return;
             s.CameraActive = false;
+            HideDarkShell();
 
             StartOfRound sor = StartOfRound.Instance;
             if (sor == null) return;
@@ -3423,7 +3690,42 @@ namespace SpiderCocoon
             float baseDist = Mathf.Sqrt(CamDistance * CamDistance + CamHeight * CamHeight) * s.ZoomMul;
             float elev = Mathf.Clamp(Mathf.Atan2(CamHeight, CamDistance) * Mathf.Rad2Deg + s.OrbitPitch, -40f, 80f) * Mathf.Deg2Rad;
             Vector3 offset = horiz * (baseDist * Mathf.Cos(elev)) + Vector3.up * (baseDist * Mathf.Sin(elev));
+            // buried under the ground, the camera stays inside the small dark pocket round the body.
+            bool pocket = InPocket(s, anchor);
+            if (pocket)
+            {
+                float maxD = Mathf.Max(0.8f, Plugin.UndergroundViewMeters.Value - 0.5f);
+                if (TrapdoorBurrow.ModelInUse) maxD = Mathf.Max(maxD, Plugin.BuriedPortMeters.Value + Mathf.Abs(Plugin.BuriedPortHeight.Value) + 0.1f);
+                if (offset.magnitude > maxD) offset = offset.normalized * maxD;
+                if (TrapdoorBurrow.ModelInUse)
+                {
+                    // inside the model's vertical tunnel (~0.8-1 m radius) there is room up, not sideways: stay within
+                    // 0.6 m of the middle and at least 1.3 m above the body, looking down at it (td33 put the camera against the cocoon).
+                    // a "viewing port". The tunnel's walls only face inward, so from outside the near wall is
+                    // invisible: a camera locked 1.6 m out from the tunnel's middle, a little above the upright cocoon's middle,
+                    // looks straight into the tunnel (cocoon, spider, far wall) instead of being squashed in beside the cocoon.
+                    // The mouse does not move it while buried. (td34/td38 kept it inside the tunnel: cramped.)
+                    // look in from in front of the spider's face (its mouth holds the cocoon); from behind, its
+                    // abdomen hid the cocoon.
+                    Vector3 port = new Vector3(s.CamDir.x, 0f, s.CamDir.z);
+                    if (s.Spider != null && !s.Spider.isEnemyDead && s.Spider.meshContainer != null)
+                    {
+                        Vector3 f = s.Spider.meshContainer.forward; f.y = 0f;
+                        if (f.sqrMagnitude > 0.01f) port = f;
+                    }
+                    if (port.sqrMagnitude < 0.01f) port = Vector3.forward;
+                    offset = port.normalized * Plugin.BuriedPortMeters.Value + Vector3.up * Plugin.BuriedPortHeight.Value; // past the spider's body (at 1.6 m the camera was inside it: black)
+                }
+            }
             Vector3 desired = anchor + offset;
+            if (pocket)
+            {
+                // and never up through the ground (the burrow is only ~2 m deep; tilting up used to show the surface).
+                RaycastHit sg;
+                if (Physics.Raycast(new Vector3(desired.x, Mathf.Max(desired.y, anchor.y) + 20f, desired.z), Vector3.down, out sg, 60f,
+                        sor.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore) && desired.y > sg.point.y - 0.3f)
+                    desired.y = Mathf.Max(anchor.y + 0.2f, sg.point.y - 0.3f);
+            }
 
             // Don't let the camera end up inside a wall.
             RaycastHit hit;
@@ -3434,7 +3736,8 @@ namespace SpiderCocoon
             }
 
             float t = 1f - Mathf.Exp(-12f * Time.deltaTime); // smooth follow (quick enough to feel like mouse look)
-            cam.position = s.CamInitialized ? Vector3.Lerp(cam.position, desired, t) : desired;
+            bool outsidePocket = pocket && (cam.position - anchor).magnitude > PocketRadius() - 0.2f;
+            cam.position = s.CamInitialized && !outsidePocket ? Vector3.Lerp(cam.position, desired, t) : desired;
 
             Vector3 lookDir = anchor - cam.position;
             if (lookDir.sqrMagnitude > 0.0001f)
@@ -3443,6 +3746,199 @@ namespace SpiderCocoon
                 cam.rotation = s.CamInitialized ? Quaternion.Slerp(cam.rotation, target, t) : target;
             }
             s.CamInitialized = true;
+            UnderGroundView(anchor, pocket);
+            PocketLight(Vector3.Lerp(anchor, cam.position, TrapdoorBurrow.ModelInUse ? 0.85f : 0.6f), pocket); // by the port, not inside the spider
+        }
+
+        // ---- buried victim: under the ground you only see a couple of metres ----
+        // The ground is one-sided: seen from below it is invisible, so a camera under it sees the whole map and sky.
+        // While the camera is below the surface, a black sphere (faces inward) sits round it at UndergroundViewMeters:
+        // the body, the spider and the earth close by show, everything further away is dark. Your own game only.
+        private static GameObject darkShell;
+        private static Material darkMat;
+        private static bool darkLogged, darkFailed;
+
+        // The dark pocket's radius: the view distance, or (td40) far enough to hold the viewing port camera.
+        private static float PocketRadius()
+        {
+            float r = Plugin.UndergroundViewMeters.Value;
+            if (TrapdoorBurrow.ModelInUse) r = Mathf.Max(r, Plugin.BuriedPortMeters.Value + Mathf.Abs(Plugin.BuriedPortHeight.Value) + 0.6f);
+            return r;
+        }
+
+        // The body is buried below the ground surface (cast down from high up at the body's spot).
+        private static bool InPocket(CocoonState s, Vector3 anchor)
+        {
+            float r = Plugin.UndergroundViewMeters.Value;
+            if (r <= 0.05f || !s.Buried) return false;
+            RaycastHit g;
+            if (Physics.Raycast(new Vector3(anchor.x, Mathf.Max(anchor.y, s.DigSpot.y) + 20f, anchor.z), Vector3.down, out g, 60f,
+                    StartOfRound.Instance.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore))
+                return anchor.y < g.point.y - 0.1f;
+            return anchor.y < s.DigSpot.y - 0.1f;
+        }
+
+        // the dark sphere sits round the BODY (td21 put it round the camera, which orbits 3.7 m out, so the
+        // body itself was outside it and everything was black).
+        private static void UnderGroundView(Vector3 anchor, bool pocket)
+        {
+            float r = Plugin.UndergroundViewMeters.Value;
+            if (!pocket) { if (darkShell != null && darkShell.activeSelf) darkShell.SetActive(false); return; }
+            if (darkShell == null && (darkFailed || !MakeDarkShell())) return;
+            if (!darkShell.activeSelf) darkShell.SetActive(true);
+            darkShell.transform.position = anchor;
+            darkShell.transform.localScale = Vector3.one * (PocketRadius() * 2f);
+            if (!darkLogged) { darkLogged = true; Plugin.Log.LogInfo("Buried camera: under the ground, view limited to " + r.ToString("0.0") + " m."); }
+        }
+
+        private static void HideDarkShell() { if (darkShell != null) darkShell.SetActive(false); PocketLight(Vector3.zero, false); }
+
+        // a faint light in the pocket. A copy of the local player's own night-vision light (an HDRP light that is
+        // already set up; the game only switches the original on inside the facility), dimmed to UndergroundLightPercent.
+        private static Light pocketLight;
+        private static Component pocketHd;
+        private static float pocketBase = -1f, pocketLastPct = -1f;
+        private static bool lightFailed;
+
+        private static void PocketLight(Vector3 at, bool on)
+        {
+            try
+            {
+                float pct = Plugin.UndergroundLightPercent.Value;
+                if (!on || pct <= 0.01f) { if (pocketLight != null && pocketLight.enabled) pocketLight.enabled = false; return; }
+                if (pocketLight == null && (lightFailed || !MakePocketLight())) return;
+                pocketLight.transform.position = at;
+                if (Mathf.Abs(pct - pocketLastPct) > 0.01f) { SetLightLevel(pct); pocketLastPct = pct; }
+                if (!pocketLight.enabled) pocketLight.enabled = true;
+            }
+            catch (Exception e) { lightFailed = true; Plugin.Log.LogWarning("Buried camera light failed: " + e.Message); }
+        }
+
+        private static bool MakePocketLight()
+        {
+            PlayerControllerB me = GameNetworkManager.Instance != null ? GameNetworkManager.Instance.localPlayerController : null;
+            Light src = me != null ? me.nightVision : null;
+            if (src == null) { lightFailed = true; Plugin.Log.LogInfo("Buried camera: no night-vision light to copy; the pocket stays dark."); return false; }
+            GameObject g = UnityEngine.Object.Instantiate(src.gameObject);
+            g.name = "HungToDry_PocketLight";
+            g.transform.SetParent(null, true);
+            foreach (Transform child in g.transform) UnityEngine.Object.Destroy(child.gameObject); // the light only
+            pocketLight = g.GetComponent<Light>();
+            if (pocketLight == null) { UnityEngine.Object.Destroy(g); lightFailed = true; return false; }
+            pocketLight.shadows = LightShadows.None;
+            pocketLight.color = new Color(1f, 0.86f, 0.7f); // warm, like light leaking in through the earth
+            foreach (Component c in g.GetComponents<Component>()) if (c != null && c.GetType().Name == "HDAdditionalLightData") { pocketHd = c; break; }
+            pocketBase = ReadIntensity();
+            pocketLastPct = -1f; // a re-made light must be dimmed again
+            float r = Mathf.Max(Plugin.UndergroundViewMeters.Value, Plugin.BuriedPortMeters.Value + 1.5f) + 1f; // reaches the far tunnel wall from the port
+            pocketLight.range = r;
+            if (pocketHd != null)
+            {
+                CallHd("SetRange", r);
+                try
+                {
+                    var lp = pocketHd.GetType().GetProperty("lightlayersMask");
+                    if (lp != null && lp.CanWrite) lp.SetValue(pocketHd, Enum.ToObject(lp.PropertyType, 255)); // light everything
+                    var sp = pocketHd.GetType().GetProperty("affectsVolumetric");
+                    if (sp != null && sp.CanWrite) sp.SetValue(pocketHd, false); // no glowing fog
+                }
+                catch (Exception) { }
+            }
+            pocketLight.enabled = false;
+            Plugin.Log.LogInfo("Buried camera: pocket light copied from night vision (base intensity " + pocketBase.ToString("0.##") + (pocketHd != null ? ", HDRP light data found" : ", no HDRP light data") + ").");
+            return true;
+        }
+
+        private static float ReadIntensity()
+        {
+            try
+            {
+                if (pocketHd != null)
+                {
+                    var ip = pocketHd.GetType().GetProperty("intensity");
+                    if (ip != null) return Convert.ToSingle(ip.GetValue(pocketHd));
+                }
+            }
+            catch (Exception) { }
+            return pocketLight != null ? pocketLight.intensity : 1f;
+        }
+
+        private static void SetLightLevel(float pct)
+        {
+            float v = Mathf.Max(0f, pocketBase) * pct / 100f;
+            if (pocketHd != null)
+            {
+                try
+                {
+                    var ip = pocketHd.GetType().GetProperty("intensity");
+                    if (ip != null && ip.CanWrite) { ip.SetValue(pocketHd, v); return; }
+                }
+                catch (Exception) { }
+                if (CallHd("SetIntensity", v)) return;
+            }
+            pocketLight.intensity = v;
+        }
+
+        private static bool CallHd(string name, float v)
+        {
+            try
+            {
+                var m = pocketHd != null ? pocketHd.GetType().GetMethod(name, new[] { typeof(float) }) : null;
+                if (m == null) return false;
+                m.Invoke(pocketHd, new object[] { v });
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        private static bool MakeDarkShell()
+        {
+            try
+            {
+                GameObject g = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                g.name = "HungToDry_UndergroundDark";
+                Collider c = g.GetComponent<Collider>(); if (c != null) UnityEngine.Object.Destroy(c);
+                MeshFilter mf = g.GetComponent<MeshFilter>();
+                Mesh m = UnityEngine.Object.Instantiate(mf.sharedMesh);
+                int[] t = m.triangles;
+                for (int i = 0; i < t.Length; i += 3) { int x = t[i]; t[i] = t[i + 1]; t[i + 1] = x; } // faces point inward
+                m.triangles = t;
+                Vector3[] n = m.normals; for (int i = 0; i < n.Length; i++) n[i] = -n[i]; m.normals = n;
+                m.bounds = new Bounds(Vector3.zero, Vector3.one * 2f);
+                mf.sharedMesh = m;
+                MeshRenderer r = g.GetComponent<MeshRenderer>();
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                r.receiveShadows = false;
+                if (darkMat == null)
+                {
+                    Shader sh = Shader.Find("HDRP/Unlit");
+                    if (sh != null)
+                    {
+                        darkMat = new Material(sh);
+                        if (darkMat.HasProperty("_UnlitColor")) darkMat.SetColor("_UnlitColor", Color.black);
+                        darkMat.color = Color.black;
+                    }
+                    else
+                    {
+                        // No unlit shader in the build: a plain black lit material (no light reaches it from inside).
+                        Material any = null;
+                        foreach (Material mm in Resources.FindObjectsOfTypeAll<Material>())
+                            if (mm != null && mm.shader != null && mm.shader.name == "HDRP/Lit") { any = mm; break; }
+                        if (any != null)
+                        {
+                            darkMat = new Material(any);
+                            try { darkMat.SetTexture("_BaseColorMap", null); darkMat.SetTexture("_NormalMap", null); darkMat.SetTexture("_MaskMap", null); darkMat.SetTexture("_EmissiveColorMap", null); darkMat.SetColor("_BaseColor", Color.black); darkMat.SetColor("_EmissiveColor", Color.black); darkMat.SetFloat("_Smoothness", 0f); darkMat.SetFloat("_Metallic", 0f); } catch (Exception) { }
+                        }
+                    }
+                    Plugin.Log.LogInfo("Buried camera: darkness material " + (darkMat != null ? "'" + darkMat.shader.name + "'" : "not found (feature off)"));
+                }
+                if (darkMat == null) { UnityEngine.Object.Destroy(g); darkFailed = true; return false; }
+                r.sharedMaterial = darkMat;
+                g.SetActive(false);
+                darkShell = g;
+                return true;
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Buried camera darkness failed: " + e.Message); return false; }
         }
     }
 
@@ -3690,6 +4186,12 @@ namespace SpiderCocoon
                 mm.RegisterNamedMessageHandler(DepthSync.Name, DepthSync.OnMessage);
                 mm.RegisterNamedMessageHandler(SpiderWeb.Name, SpiderWeb.OnMessage);
                 mm.RegisterNamedMessageHandler(HangSync.Name, HangSync.OnMessage);
+                mm.RegisterNamedMessageHandler(TrapdoorGrip.Name, TrapdoorGrip.OnMessage);
+                mm.RegisterNamedMessageHandler(TrapdoorBurrow.PlaceName, TrapdoorBurrow.OnPlace);
+                mm.RegisterNamedMessageHandler(MaskTrap.SpringName, MaskTrap.OnSpring);
+                mm.RegisterNamedMessageHandler(DormantReqName, OnDormantRequest);
+                mm.RegisterNamedMessageHandler(DormantName, OnDormant);
+                mm.RegisterNamedMessageHandler(MaskTrap.MimicName, MaskTrap.OnMimic);
                 registeredWith = mm;
                 Plugin.Log.LogInfo("Hung to Dry network messages registered.");
             }
@@ -3703,19 +4205,65 @@ namespace SpiderCocoon
             }
         }
 
-        public static void RequestRelease(int victimId)
+        private const string DormantReqName = "HungToDry.DormantReq";
+        private const string DormantName = "HungToDry.Dormant";
+
+        // The victim's own game says "my cocoon stays hanging": the host passes it on to everyone else.
+        public static void RequestDormant(int victimId)
+        {
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm == null || !nm.IsListening || nm.CustomMessagingManager == null) return;
+            if (nm.IsServer) { BroadcastDormant(victimId); return; }
+            using (Unity.Netcode.FastBufferWriter w = new Unity.Netcode.FastBufferWriter(2, Unity.Collections.Allocator.Temp))
+            {
+                w.WriteByteSafe((byte)victimId);
+                nm.CustomMessagingManager.SendNamedMessage(DormantReqName, Unity.Netcode.NetworkManager.ServerClientId, w);
+            }
+        }
+
+        private static void BroadcastDormant(int victimId)
+        {
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            using (Unity.Netcode.FastBufferWriter w = new Unity.Netcode.FastBufferWriter(2, Unity.Collections.Allocator.Temp))
+            {
+                w.WriteByteSafe((byte)victimId);
+                nm.CustomMessagingManager.SendNamedMessageToAll(DormantName, w);
+            }
+            Cocoon.DormantMove(victimId); // the host does not receive its own broadcast
+        }
+
+        private static void OnDormantRequest(ulong senderClientId, Unity.Netcode.FastBufferReader reader)
+        {
+            try
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm == null || !nm.IsServer) return;
+                byte id; reader.ReadByteSafe(out id);
+                BroadcastDormant(id);
+            }
+            catch (Exception e) { Plugin.Log.LogError("Dormant request failed: " + e); }
+        }
+
+        private static void OnDormant(ulong senderClientId, Unity.Netcode.FastBufferReader reader)
+        {
+            try { byte id; reader.ReadByteSafe(out id); Cocoon.DormantMove(id); }
+            catch (Exception e) { Plugin.Log.LogError("Dormant message failed: " + e); }
+        }
+
+        public static void RequestRelease(int victimId, bool byCut = false)
         {
             Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
             if (nm == null || !nm.IsListening || nm.CustomMessagingManager == null) return;
 
             if (nm.IsServer)
             {
-                Broadcast(victimId);
+                Broadcast(victimId, byCut);
                 return;
             }
-            using (Unity.Netcode.FastBufferWriter writer = new Unity.Netcode.FastBufferWriter(1, Unity.Collections.Allocator.Temp))
+            using (Unity.Netcode.FastBufferWriter writer = new Unity.Netcode.FastBufferWriter(2, Unity.Collections.Allocator.Temp))
             {
                 writer.WriteByteSafe((byte)victimId);
+                writer.WriteByteSafe((byte)(byCut ? 1 : 0));
                 nm.CustomMessagingManager.SendNamedMessage(RequestName, Unity.Netcode.NetworkManager.ServerClientId, writer);
             }
         }
@@ -3836,8 +4384,9 @@ namespace SpiderCocoon
             }
         }
 
-        private static void Broadcast(int victimId)
+        private static void Broadcast(int victimId, bool byCut = false)
         {
+            if (byCut && MaskTrap.TrySpring(victimId)) return; // a Masked burst out instead: the victim stays wrapped
             Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
             using (Unity.Netcode.FastBufferWriter writer = new Unity.Netcode.FastBufferWriter(1, Unity.Collections.Allocator.Temp))
             {
@@ -3855,7 +4404,9 @@ namespace SpiderCocoon
                 if (nm == null || !nm.IsServer) return;
                 byte id;
                 reader.ReadByteSafe(out id);
-                Broadcast(id);
+                byte cut = 0;
+                if (reader.Position < reader.Length) reader.ReadByteSafe(out cut);
+                Broadcast(id, cut != 0);
             }
             catch (Exception e)
             {
@@ -5212,6 +5763,33 @@ namespace SpiderCocoon
             }
         }
 
+        // True while the game itself is slowing the local player on purpose: standing in quicksand or water
+        // (QuicksandTrigger.sinkingLocalPlayer) or held by Cadaver Bloom (CadaverGrowthAI.hinderingLocalPlayer).
+        static System.Reflection.FieldInfo cadaverHinderF;
+        static Type cadaverT;
+        static bool cadaverLooked;
+        internal static bool SlowedByGame(PlayerControllerB p)
+        {
+            try
+            {
+                if (p == null || p != GameNetworkManager.Instance.localPlayerController) return false;
+                if (p.isSinking) return true;
+                foreach (QuicksandTrigger q in UnityEngine.Object.FindObjectsOfType<QuicksandTrigger>())
+                    if (q != null && q.sinkingLocalPlayer) return true;
+                if (!cadaverLooked)
+                {
+                    cadaverLooked = true;
+                    cadaverT = AccessTools.TypeByName("CadaverGrowthAI");
+                    if (cadaverT != null) cadaverHinderF = AccessTools.Field(cadaverT, "hinderingLocalPlayer");
+                }
+                if (cadaverT != null && cadaverHinderF != null)
+                    foreach (UnityEngine.Object c in UnityEngine.Object.FindObjectsOfType(cadaverT))
+                        if (c != null && (bool)cadaverHinderF.GetValue(c)) return true;
+            }
+            catch (Exception) { }
+            return false;
+        }
+
         // Lets go of any web that thinks it is holding the player although they are no longer in it, and then,
         // if nothing at all is holding them, puts their walking speed back to normal.
         internal static void FixStuckHindrance(PlayerControllerB p)
@@ -5231,7 +5809,7 @@ namespace SpiderCocoon
                     leave.Invoke(web, new object[] { p });
                     Plugin.Log.LogInfo("Freed the player from a web that was still slowing them after they had left it.");
                 }
-                if (!stillHeld && (p.isMovementHindered != 0 || Mathf.Abs(p.hinderedMultiplier - 1f) > 0.01f))
+                if (!stillHeld && !SlowedByGame(p) && (p.isMovementHindered != 0 || Mathf.Abs(p.hinderedMultiplier - 1f) > 0.01f))
                 {
                     Plugin.Log.LogInfo("Walking speed was stuck slow (hindered=" + p.isMovementHindered + ", x" + p.hinderedMultiplier.ToString("0.00") + "); put back to normal.");
                     p.isMovementHindered = 0;
@@ -5326,6 +5904,7 @@ namespace SpiderCocoon
                 if (___currentlyHeldBody != null) why.Add("spider is holding a body");
                 if (SpiderBiteMemory.OnCooldown(__instance)) why.Add("bite cooldown");
                 if (Trapdoor.Applies(__instance) && Cocoon.SpiderHasVictim(__instance)) why.Add("trapdoor spider already has a victim");
+                if (Trapdoor.NoBite(__instance)) why.Add("trapdoor spider in its burrow, or the spider is gripping someone (the grip decides, no bite)");
                 if (p == null) why.Add("game's own collision check says this is not a valid player (stunned/just hit/special animation/untargetable)");
                 else
                 {
@@ -5353,6 +5932,9 @@ namespace SpiderCocoon
             DeadBodyInfo ___currentlyHeldBody)
         {
             if (__instance.isEnemyDead || ___onWall) return false;
+
+            // A trapdoor spider never bites from its burrow or while it holds someone: it catches by the grip only.
+            if (Trapdoor.NoBite(__instance)) return false;
 
             // Busy carrying or wrapping someone: a second catch would leave the first victim orphaned.
             if (___currentlyHeldBody != null) return false;
@@ -5672,6 +6254,7 @@ namespace SpiderCocoon
         private static void Postfix(SandSpiderAI __instance, PlayerControllerB playerWhoHit)
         {
             Cocoon.SpiderWasHit(__instance, playerWhoHit);
+            Trapdoor.OnHit(__instance);
         }
     }
 
@@ -5683,7 +6266,7 @@ namespace SpiderCocoon
     // ------------------------------------------------------------------
     internal static class Trapdoor
     {
-        internal enum Mode { Walk, Burrowing, Waiting, Emerging, Surfaced, Pulling }
+        internal enum Mode { Walk, Burrowing, Waiting, Emerging, Surfaced, Pulling, Returning, Gripping }
 
         internal class TD
         {
@@ -5698,9 +6281,35 @@ namespace SpiderCocoon
             public int VictimId = -1;
             public float NextDump;
             public SandSpiderAI Spider;
+            // Its home burrow: where it first buried itself. Catches are dragged back here and it returns here after a chase.
+            public Vector3 Home; public bool HasHome;
+            public Vector3 RetPos; public float RetStill;
+            public float CoolUntil; // no new grab before this (just let go of someone)
+            public float HitAt = -1f; // last time it was hit (owner's game)
+            public bool LowHold;      // won the tug-of-war: stays half in its hole while it wraps the catch
+            public bool WantHide;     // what this game would hide (sent to the others even if shown here)
         }
 
         private static readonly Dictionary<int, TD> All = new Dictionary<int, TD>();
+
+        internal static bool Spawned(ulong id)
+        {
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            return nm != null && nm.SpawnManager != null && nm.SpawnManager.SpawnedObjects.ContainsKey(id);
+        }
+
+        internal static void PruneGone()
+        {
+            int before = All.Count + Remote.Count;
+            List<int> dead = new List<int>();
+            foreach (KeyValuePair<int, TD> kv in All) if (kv.Value == null || kv.Value.Spider == null) dead.Add(kv.Key);
+            foreach (int k in dead) All.Remove(k);
+            List<ulong> gone = new List<ulong>();
+            foreach (ulong k in Remote.Keys) if (!Spawned(k)) gone.Add(k);
+            foreach (ulong k in gone) Remote.Remove(k);
+            ApartSince.Clear();
+            if (dead.Count + gone.Count > 0) Plugin.Dbg("Round over: forgot " + (dead.Count + gone.Count) + " of " + before + " trapdoor spider record(s) for spiders that are gone.");
+        }
         private static readonly System.Reflection.MethodInfo CalcMeshPath = AccessTools.Method(typeof(SandSpiderAI), "CalculateSpiderPathToPosition");
         private static readonly System.Reflection.FieldInfo HeldBody = AccessTools.Field(typeof(SandSpiderAI), "currentlyHeldBody");
         private static readonly System.Reflection.FieldInfo ChaseTimerF = AccessTools.Field(typeof(SandSpiderAI), "chaseTimer");
@@ -5709,6 +6318,25 @@ namespace SpiderCocoon
         private static readonly System.Reflection.FieldInfo ReachedWallF = AccessTools.Field(typeof(SandSpiderAI), "reachedWallPosition");
         private static readonly System.Reflection.FieldInfo SpooledF = AccessTools.Field(typeof(SandSpiderAI), "spooledPlayerBody");
         private static readonly System.Reflection.FieldInfo WatchF = AccessTools.Field(typeof(SandSpiderAI), "watchFromDistance");
+
+        // No ordinary bite from a trapdoor spider that is in its burrow (any depth) or holding someone: on every game.
+        internal static bool NoBite(SandSpiderAI s)
+        {
+            try { return s != null && (TrapdoorGrip.Gripping(s) || (Applies(s) && DepthOf(s) > 0.05f)); }
+            catch (Exception) { return false; }
+        }
+
+        // Owner's game: remember the hit, so a grip ends even when the game's own chase rules say "no chase".
+        internal static void OnHit(SandSpiderAI s)
+        {
+            try
+            {
+                if (s == null || !s.IsOwner || s.isEnemyDead || !Applies(s)) return;
+                TD td = Get(s, false);
+                if (td != null) td.HitAt = Time.time;
+            }
+            catch (Exception) { }
+        }
 
         internal static bool Applies(SandSpiderAI s)
         {
@@ -5733,6 +6361,9 @@ namespace SpiderCocoon
 
         internal static void SetHidden(SandSpiderAI s, TD td, bool hide)
         {
+            td.WantHide = hide;
+            // the player it holds underground sees it in their dark pocket (everyone above still has it hidden).
+            if (hide && Cocoon.LocalBuriedBy(s)) hide = false;
             try
             {
                 if (hide)
@@ -5760,10 +6391,11 @@ namespace SpiderCocoon
                 if (n == null) continue;
                 float d = Vector3.Distance(n.transform.position, here);
                 if (d < 12f || d > 60f) continue;
-                if (s.SetDestinationToPosition(n.transform.position, true))
+                Vector3 site = BurrowSite.Best(n.transform.position, s);
+                if (s.SetDestinationToPosition(site, true) || (site != n.transform.position && s.SetDestinationToPosition(site = n.transform.position, true)))
                 {
-                    td.Node = n.transform.position; td.HasNode = true; td.M = Mode.Walk; td.Since = Time.time;
-                    Plugin.Log.LogInfo("Trapdoor spider: heading to a spot " + d.ToString("0") + " m away to bury itself.");
+                    td.Node = site; td.HasNode = true; td.M = Mode.Walk; td.Since = Time.time;
+                    Plugin.Log.LogInfo("Trapdoor spider: heading to a spot " + d.ToString("0") + " m away to bury itself (" + BurrowSite.Last + ").");
                     return true;
                 }
             }
@@ -5864,6 +6496,8 @@ namespace SpiderCocoon
         }
 
         // Looks through the materials the game has loaded for something earthy (dirt, mud, gravel...). Logs what it picked.
+        internal static Material DirtMaterial() { return FindDirtMaterial(); }
+
         private static Material FindDirtMaterial()
         {
             if (dirtSearched) return dirtMaterial;
@@ -5972,8 +6606,7 @@ namespace SpiderCocoon
                 }
                 // The same lumps on every game: the shape is worked out from the spot itself.
                 System.Random rnd = new System.Random(unchecked(Mathf.RoundToInt(spot.x * 10f) * 73856093 ^ Mathf.RoundToInt(spot.z * 10f) * 19349663));
-                AddLump(m.transform, Vector3.zero, new Vector3(1.7f, 0.4f, 1.7f), useMat);
-                for (int i = 0; i < 5; i++)
+                for (int i = 0; i < 0; i++) // the burrow's lid marks the spot now (TrapdoorBurrow); no earth lumps
                 {
                     float ang = (float)(rnd.NextDouble() * Math.PI * 2.0);
                     float rad = 0.35f + (float)rnd.NextDouble() * 0.45f;
@@ -5989,15 +6622,73 @@ namespace SpiderCocoon
             catch (Exception e) { Plugin.Log.LogWarning("Could not mark the burial spot: " + e.Message); }
         }
 
+        // a buried cocoon lay across the narrow tunnel and stuck through its walls. Once the spider has pulled it
+        // all the way down, the cocoon gets its own attach point on the tunnel's middle line, 1.5 m under the surface, turned
+        // so the cocoon hangs straight down the tunnel. Every game does this from the same burial spot.
+        private static readonly Dictionary<CocoonState, Transform> Upright = new Dictionary<CocoonState, Transform>();
+        internal static void KeepUpright()
+        {
+            if (Marked.Count == 0 && Upright.Count == 0) return;
+            try
+            {
+                foreach (CocoonState st in Marked)
+                {
+                    if (st == null || !st.Buried || st.Player == null) continue;
+                    bool alive = false;
+                    alive = Cocoon.StillThere(st); // a dormant (dead, kept) buried cocoon still counts
+                    if (!alive) continue;
+                    DeadBodyInfo b = st.Player.deadBody;
+                    if (b == null || b.bodyParts == null || b.attachedLimb == null) continue;
+                    if (st.Spider != null && !st.Spider.isEnemyDead && DepthOf(st.Spider) < Plugin.TrapdoorDepth.Value - 0.15f) continue; // still being pulled down
+                    Transform a;
+                    if (!Upright.TryGetValue(st, out a) || a == null)
+                    {
+                        Vector3 lp = b.attachedLimb.position, far = lp; float fd = 0f;
+                        foreach (Rigidbody rb in b.bodyParts) { if (rb == null) continue; float d = (rb.position - lp).sqrMagnitude; if (d > fd) { fd = d; far = rb.position; } }
+                        Vector3 dir = (far - lp).sqrMagnitude > 0.01f ? (far - lp).normalized : Vector3.down;
+                        GameObject go = new GameObject("HungToDry_BuriedUpright");
+                        // the attach limb is the MIDDLE of the cocoon (~1 m to either end): 1.5 m down keeps it all inside the
+                        // 2.6 m tunnel (at 0.6 m its top stuck out of the ground beside the lid).
+                        go.transform.position = new Vector3(st.DigSpot.x, st.DigSpot.y - 1.5f, st.DigSpot.z);
+                        go.transform.rotation = Quaternion.FromToRotation(dir, Vector3.down) * b.attachedLimb.rotation;
+                        a = go.transform; Upright[st] = a;
+                        Plugin.Log.LogInfo("Trapdoor spider: buried cocoon of player " + st.Player.playerClientId + " turned upright in the tunnel (it was " + Vector3.Angle(dir, Vector3.down).ToString("0") + " deg off vertical, " + Mathf.Sqrt(fd).ToString("0.0") + " m long).");
+                    }
+                    if (b.attachedTo != a) b.attachedTo = a;
+                    // the victim died down here (dormant, DeadStayHanging): the spider must stop "holding"
+                    // the body, or its AI step hands control back to the game's own AI (wander, try to hang the body).
+                    if (st.Spider != null && HeldBody != null && Cocoon.Dormants.ContainsValue(st) && ReferenceEquals(HeldBody.GetValue(st.Spider), b))
+                    {
+                        HeldBody.SetValue(st.Spider, null);
+                        Plugin.Log.LogInfo("Trapdoor spider: its buried victim died; it lets go of the body and waits again.");
+                    }
+                }
+                // Tidy: the victim was dug out, freed or died.
+                List<CocoonState> gone = null;
+                foreach (KeyValuePair<CocoonState, Transform> kv in Upright)
+                    if (!Marked.Contains(kv.Key)) (gone ?? (gone = new List<CocoonState>())).Add(kv.Key);
+                if (gone != null) foreach (CocoonState st in gone)
+                {
+                    Transform t = Upright[st]; Upright.Remove(st);
+                    // this is the moment a dead buried body comes loose (collisions off): bring it up NOW, before it falls.
+                    if (st.Player != null && st.Player.isPlayerDead)
+                    {
+                        if (st.Player.deadBody != null) Cocoon.SurfaceIfBuried(st, st.Player.deadBody);
+                        if (st.StandIn != null && st.StandIn != st.Player.deadBody) Cocoon.SurfaceIfBuried(st, st.StandIn);
+                    }
+                    if (t != null) UnityEngine.Object.Destroy(t.gameObject);
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Buried upright failed: " + e.Message); }
+        }
+
         // Removes the patch of earth once its victim is no longer buried (dug out, released or dead).
         internal static void TidyMarkers()
         {
             for (int i = Marked.Count - 1; i >= 0; i--)
             {
                 CocoonState st = Marked[i];
-                bool alive = false;
-                foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
-                    if (kv.Value == st) { alive = true; break; }
+                bool alive = Cocoon.StillThere(st); // dormant (dead, kept) cocoons too
                 if (alive)
                 {
                     if (st.Marker != null)
@@ -6016,6 +6707,57 @@ namespace SpiderCocoon
         }
 
         // The spider has its catch wrapped: instead of hanging it from a ceiling it drags it down into the ground.
+        // Owner: the tug-of-war is over (the message reached us). Lost: the normal grab and wrap follow (Cocoon.Begin, run by
+        // the message on every game), then the catch is pulled under here. Otherwise: back down the hole, short pause.
+        internal static void GripEnded(SandSpiderAI s, int victim, byte phase)
+        {
+            TD td = Get(s, false);
+            if (td == null) return;
+            if (phase == TrapdoorGrip.Lost) { td.M = Mode.Surfaced; td.Since = Time.time; td.VictimId = victim; td.LowHold = true; return; }
+            if (td.M == Mode.Gripping) { td.M = Mode.Burrowing; td.Since = Time.time; }
+            td.Target = null; td.CoolUntil = Time.time + 4f;
+        }
+
+        // The catch is wrapped: carry it back to the home burrow and drag it in there. Too far (over 40 m), no home, or
+        // already there: drag it under where it stands.
+        private static void StartReturn(SandSpiderAI s, TD td, DeadBodyInfo held)
+        {
+            float d = td.HasHome ? new Vector2(s.transform.position.x - td.Home.x, s.transform.position.z - td.Home.z).magnitude : -1f;
+            if (!td.HasHome || d < 1.5f || d > 40f)
+            {
+                if (td.HasHome && d > 40f) Plugin.Log.LogInfo("Trapdoor spider: its burrow is " + d.ToString("0") + " m away, too far; dragging the catch under here.");
+                BeginPull(s, held);
+                return;
+            }
+            td.M = Mode.Returning; td.Since = Time.time; td.RetPos = s.transform.position; td.RetStill = Time.time;
+            Plugin.Log.LogInfo("Trapdoor spider: carrying its catch back to its burrow (" + d.ToString("0") + " m).");
+        }
+
+        // AI step while carrying the catch home (the game's own carrying logic is skipped meanwhile).
+        private static bool ReturnHome(SandSpiderAI s, TD td)
+        {
+            DeadBodyInfo held = HeldBody != null ? HeldBody.GetValue(s) as DeadBodyInfo : null;
+            if (held == null) { td.M = Mode.Surfaced; return true; } // dropped it (hit, say): back to normal
+            Vector3 here = s.transform.position;
+            if (Vector3.Distance(here, td.RetPos) > 0.5f) { td.RetPos = here; td.RetStill = Time.time; }
+            float d = new Vector2(here.x - td.Home.x, here.z - td.Home.z).magnitude;
+            bool stuck = Time.time - td.RetStill > 3f, slow = Time.time - td.Since > 25f;
+            if (d < 1.2f || stuck || slow)
+            {
+                if (stuck || slow) Plugin.Log.LogInfo("Trapdoor spider: could not get the catch home (" + (stuck ? "stuck" : "took too long") + ", " + d.ToString("0.0") + " m short); dragging it under here.");
+                td.M = Mode.Surfaced;
+                BeginPull(s, held);
+                return false;
+            }
+            s.destination = td.Home;
+            s.agent.speed = 5f; s.spiderSpeed = 5f;
+            s.movingTowardsTargetPlayer = false;
+            if (!s.inSpecialAnimation && s.agent.enabled && s.agent.isOnNavMesh) s.agent.SetDestination(td.Home);
+            s.SyncPositionToClients();
+            if (s.navigateMeshTowardsPosition && CalcMeshPath != null) CalcMeshPath.Invoke(s, null);
+            return false;
+        }
+
         internal static void BeginPull(SandSpiderAI s, DeadBodyInfo held)
         {
             if (s == null || held == null || !s.IsOwner) return;
@@ -6025,7 +6767,7 @@ namespace SpiderCocoon
             foreach (KeyValuePair<int, CocoonState> kv in Cocoon.ActiveStates)
                 if (kv.Value != null && kv.Value.Player != null && kv.Value.Player.deadBody == held) { victim = kv.Value; td.VictimId = kv.Key; break; }
             if (victim == null) return;
-            td.M = Mode.Pulling; td.Since = Time.time; td.HasNode = false; td.NextDump = 0f;
+            td.M = Mode.Pulling; td.Since = Time.time; td.HasNode = false; td.NextDump = 0f; td.LowHold = false;
             DumpBody(s, td, "before the pull");
             StandUpright(s);
             NoCollide(held);
@@ -6040,7 +6782,46 @@ namespace SpiderCocoon
         // Kept so the callers stay simple: the depth now travels in its own message (DepthSync).
         internal static void ForceMeshSync(SandSpiderAI s) { }
 
+        // Outdoors the spider's model finds its own route, apart from its (invisible) AI body. On rough ground (a ledge,
+        // a drop, rocks) that route can fail and the model is left behind: no spider on screen, and it cannot bite because
+        // its touch box is with the model. If the model is more than 5 m sideways from the body for 1.5 s, put it back.
+        // Height is ignored, so a spider up a tree or buried under its body is left alone. Owner only; others follow it.
+        private static readonly Dictionary<int, float> ApartSince = new Dictionary<int, float>();
+        internal static void Leash(SandSpiderAI s, bool now = false)
+        {
+            try
+            {
+                if (s == null || !s.IsOwner || s.meshContainer == null || s.inSpecialAnimation || !Cocoon.SpiderOutdoors(s)) return;
+                Vector3 a = s.meshContainerPosition, b = s.transform.position;
+                float flat = new Vector2(a.x - b.x, a.z - b.z).magnitude;
+                int id = s.GetInstanceID();
+                float limit = now ? 0.5f : 5f;
+                if (flat <= limit) { ApartSince.Remove(id); return; }
+                float since;
+                if (!now)
+                {
+                    if (!ApartSince.TryGetValue(id, out since)) { ApartSince[id] = Time.time; return; }
+                    if (Time.time - since < 1.5f) return;
+                }
+                ApartSince.Remove(id);
+                Vector3 to = new Vector3(b.x, now ? b.y : a.y + (b.y - a.y), b.z);
+                s.meshContainerPosition = to; s.meshContainerTarget = to; s.meshContainer.position = to;
+                Plugin.Log.LogInfo("Spider model was " + flat.ToString("0.0") + " m from the spider itself" + (now ? " as it buried itself" : " (stranded)") + ": put it back.");
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Spider leash failed: " + e.Message); }
+        }
+
         internal static List<TD> AllStates() { return new List<TD>(All.Values); }
+
+        // How far under the ground this trapdoor spider is right now, on any game (0 if not a sunk trapdoor spider).
+        internal static float DepthOf(SandSpiderAI s)
+        {
+            if (s == null) return 0f;
+            if (s.IsOwner) { TD td = Get(s, false); return td != null ? td.Depth : 0f; }
+            RemoteInfo r;
+            if (s.NetworkObject != null && Remote.TryGetValue(s.NetworkObjectId, out r) && !r.Ceil) return Mathf.Max(0f, r.Current);
+            return 0f;
+        }
 
         internal class RemoteInfo
         {
@@ -6070,6 +6851,7 @@ namespace SpiderCocoon
                     + ", state " + s.currentBehaviourStateIndex + ", model active " + (s.meshContainer != null && s.meshContainer.gameObject.activeInHierarchy));
             }
             r.Current = Mathf.MoveTowards(r.Current, r.Target, 12f * dt);
+            if (!r.Ceil) TrapdoorBurrow.Tick(s, r.Current, true);
             if (Mathf.Abs(r.Current) > 0.001f && s.meshContainer != null)
             {
                 Vector3 p = s.meshContainer.position;
@@ -6084,6 +6866,11 @@ namespace SpiderCocoon
         // The game's AI interval (about five times a second) for a spider that is not busy with anything else.
         internal static bool Interval(SandSpiderAI s)
         {
+            if (Applies(s) && s.IsOwner)
+            {
+                TD tr = Get(s, false);
+                if (tr != null && tr.M == Mode.Returning) return ReturnHome(s, tr);
+            }
             if (!Applies(s) || !s.IsOwner || s.currentBehaviourStateIndex != 0) return true;
             TD td0 = Get(s, false);
             bool pulling = td0 != null && td0.M == Mode.Pulling;
@@ -6091,8 +6878,9 @@ namespace SpiderCocoon
             TD td = Get(s, true);
             if (td.M == Mode.Surfaced)
             {
-                // Back from a chase or a catch: pick somewhere new to hide.
-                td.M = Mode.Walk; td.HasNode = false; td.Since = Time.time;
+                // Back from a chase or a catch: go home to its burrow (or pick a new spot if it has none).
+                td.M = Mode.Walk; td.HasNode = td.HasHome; td.Since = Time.time; td.LowHold = false;
+                if (td.HasHome) { td.Node = td.Home; Plugin.Log.LogInfo("Trapdoor spider: going back to its burrow."); }
             }
             if (td.M == Mode.Walk)
             {
@@ -6105,14 +6893,15 @@ namespace SpiderCocoon
                 {
                     s.destination = td.Node;
                     s.agent.speed = 4.25f; s.spiderSpeed = 4.25f;
-                    if (Vector3.Distance(s.transform.position, td.Node) < 1.6f || Time.time - td.Since > 45f)
+                    if (Vector3.Distance(s.transform.position, td.Node) < 0.9f || Time.time - td.Since > 45f)
                     {
                         td.M = Mode.Burrowing; td.Since = Time.time;
+                        if (!td.HasHome) { td.Home = s.transform.position; td.HasHome = true; }
                         Plugin.Log.LogInfo("Trapdoor spider: burying itself.");
                     }
                 }
             }
-            if (td.M == Mode.Burrowing || td.M == Mode.Waiting || td.M == Mode.Emerging || td.M == Mode.Pulling)
+            if (td.M == Mode.Burrowing || td.M == Mode.Waiting || td.M == Mode.Emerging || td.M == Mode.Pulling || td.M == Mode.Gripping)
             {
                 s.destination = s.transform.position;
                 s.agent.speed = 0f; s.spiderSpeed = 0f;
@@ -6130,6 +6919,7 @@ namespace SpiderCocoon
         {
             if (s == null || s.isEnemyDead) return;
             if (!s.IsOwner) { FrameRemote(s); return; }
+            if (Applies(s)) Leash(s); // trapdoor spiders only; tree, roaming and ceiling spiders are left as in 1.9.0
             TD td = Get(s, false);
             if (td == null) return;
             if (!Applies(s)) return;
@@ -6139,16 +6929,19 @@ namespace SpiderCocoon
             if (td.M == Mode.Surfaced && s.currentBehaviourStateIndex == 1 && HeldBody != null && SpooledF != null)
             {
                 object held = HeldBody.GetValue(s);
-                if (held != null && (bool)SpooledF.GetValue(s)) BeginPull(s, (DeadBodyInfo)held);
+                if (held != null && (bool)SpooledF.GetValue(s)) StartReturn(s, td, (DeadBodyInfo)held);
             }
-            // Something else took over (it was hit, say): burst out at once.
+            // Something else took over (it was hit in its hole, say): it never comes out to chase; it stays down.
             if ((td.M == Mode.Burrowing || td.M == Mode.Waiting) && s.currentBehaviourStateIndex != 0)
             {
-                td.M = Mode.Emerging; td.Since = Time.time; SetHidden(s, td, false);
+                Plugin.Log.LogInfo("Trapdoor spider: disturbed in its burrow (state " + s.currentBehaviourStateIndex + "); it stays down.");
+                s.SwitchToBehaviourState(0); s.targetPlayer = null;
+                td.CoolUntil = Mathf.Max(td.CoolUntil, Time.time + 2f);
             }
             switch (td.M)
             {
                 case Mode.Burrowing:
+                    if (td.Depth <= 0.001f) Leash(s, true); // start sinking exactly where the spider is
                     td.Depth = Mathf.Min(Plugin.TrapdoorDepth.Value, td.Depth + 1.4f * dt);
                     if (td.Depth >= Plugin.TrapdoorDepth.Value - 0.01f)
                     {
@@ -6159,24 +6952,42 @@ namespace SpiderCocoon
                     break;
                 case Mode.Waiting:
                 {
-                    PlayerControllerB hit = null; float best = Plugin.TrapdoorTriggerMeters.Value;
+                    // Someone on the trip-lines: lunge half out and grab them. It never leaves its burrow to hunt.
+                    if (Time.time < td.CoolUntil) break;
+                    PlayerControllerB hit = null; float best = Plugin.TrapdoorReachMeters.Value;
                     PlayerControllerB[] players = StartOfRound.Instance.allPlayerScripts;
                     for (int i = 0; i < players.Length; i++)
                     {
                         PlayerControllerB p = players[i];
-                        if (p == null || !s.PlayerIsTargetable(p)) continue;
-                        float d = Vector3.Distance(p.transform.position, s.transform.position);
+                        if (p == null || !s.PlayerIsTargetable(p) || Cocoon.IsCocooned(p) || Cocoon.IsVenomed(p)) continue;
+                        Vector3 dv = p.transform.position - s.transform.position;
+                        if (Mathf.Abs(dv.y) > 3f) continue;
+                        dv.y = 0f;
+                        float d = dv.magnitude;
                         if (d < best) { best = d; hit = p; }
                     }
                     if (hit != null)
                     {
-                        td.Target = hit; td.M = Mode.Emerging; td.Since = Time.time; SetHidden(s, td, false);
-                        Plugin.Log.LogInfo("Trapdoor spider: bursts out at player " + hit.playerClientId + " (" + best.ToString("0.0") + " m).");
+                        td.Target = hit; td.VictimId = (int)hit.playerClientId; td.M = Mode.Gripping; td.Since = Time.time; SetHidden(s, td, false);
+                        Plugin.Log.LogInfo("Trapdoor spider: lunges out of its burrow and grabs player " + hit.playerClientId + " (" + best.ToString("0.0") + " m).");
+                        TrapdoorGrip.Send(s.NetworkObjectId, td.VictimId, Plugin.TrapdoorGripStart.Value, TrapdoorGrip.Start);
                     }
-                    else if (Time.time - td.Since > Plugin.TrapdoorRelocateSeconds.Value)
+                    break;
+                }
+                case Mode.Gripping:
+                {
+                    // Half out of the hole, holding them; the victim's game runs the tug-of-war and tells us how it ends.
+                    td.Depth = Mathf.MoveTowards(td.Depth, 0.35f, 7f * dt);
+                    PlayerControllerB v = td.Target;
+                    bool wasHit = s.currentBehaviourStateIndex != 0 || td.HitAt >= td.Since;
+                    bool gone = v == null || v.isPlayerDead || !v.isPlayerControlled
+                        || new Vector2(v.transform.position.x - s.transform.position.x, v.transform.position.z - s.transform.position.z).magnitude > Plugin.TrapdoorReachMeters.Value + 4f;
+                    if (wasHit || gone || Time.time - td.Since > 30f)
                     {
-                        td.Target = null; td.M = Mode.Emerging; td.Since = Time.time; SetHidden(s, td, false);
-                        Plugin.Log.LogInfo("Trapdoor spider: nobody came; moving to another spot.");
+                        if (wasHit) { s.SwitchToBehaviourState(0); s.targetPlayer = null; }
+                        Plugin.Log.LogInfo("Trapdoor spider: lets go of player " + td.VictimId + " and drops back in (" + (wasHit ? "it was hit" : gone ? "they are gone" : "held too long") + ").");
+                        TrapdoorGrip.Send(s.NetworkObjectId, td.VictimId, 0f, TrapdoorGrip.Abort);
+                        td.M = Mode.Burrowing; td.Since = Time.time; td.Target = null; td.CoolUntil = Time.time + 4f;
                     }
                     break;
                 }
@@ -6185,18 +6996,10 @@ namespace SpiderCocoon
                     bool victimGone = td.VictimId < 0 || !Cocoon.ActiveStates.ContainsKey(td.VictimId) || HeldBody.GetValue(s) == null;
                     if (victimGone || s.currentBehaviourStateIndex != 0)
                     {
-                        // Dug out: whoever is nearest the hole is the one the spider goes for.
-                        PlayerControllerB avenger = null; float ad = 12f;
-                        PlayerControllerB[] ps = StartOfRound.Instance.allPlayerScripts;
-                        for (int i = 0; i < ps.Length; i++)
-                        {
-                            PlayerControllerB q = ps[i];
-                            if (q == null || q.isPlayerDead || !q.isPlayerControlled || !s.PlayerIsTargetable(q)) continue;
-                            float qd = Vector3.Distance(q.transform.position, s.transform.position);
-                            if (qd < ad) { ad = qd; avenger = q; }
-                        }
-                        td.Target = avenger; td.M = Mode.Emerging; td.Since = Time.time; SetHidden(s, td, false);
-                        Plugin.Log.LogInfo("Trapdoor spider: the victim is gone (freed or dug out); climbing out" + (avenger != null ? " after player " + avenger.playerClientId + "." : "."));
+                        // Dug out (or freed): it stays in its burrow and waits again; anyone still on the lines after a moment is fair game.
+                        if (s.currentBehaviourStateIndex != 0) { s.SwitchToBehaviourState(0); s.targetPlayer = null; }
+                        td.Target = null; td.M = Mode.Burrowing; td.Since = Time.time; td.CoolUntil = Time.time + 4f;
+                        Plugin.Log.LogInfo("Trapdoor spider: the victim is gone (freed or dug out); it stays in its burrow.");
                         break;
                     }
                     StandUpright(s);
@@ -6210,11 +7013,12 @@ namespace SpiderCocoon
                         NoCollide(HeldBody.GetValue(s) as DeadBodyInfo); // the game may switch them back on
                         DumpBody(s, td, "pulling");
                     }
-                    if (Time.time - td.Since > Plugin.TrapdoorHoldSeconds.Value)
+                    float letGo = Plugin.TrapdoorReleaseSeconds.Value;
+                    if (letGo > 0f && Time.time - td.Since > letGo)
                     {
                         Plugin.Log.LogInfo("Trapdoor spider: lets player " + td.VictimId + " go.");
                         int id = td.VictimId;
-                        td.Target = null; td.M = Mode.Emerging; td.Since = Time.time; SetHidden(s, td, false);
+                        td.Target = null; td.M = Mode.Burrowing; td.Since = Time.time; td.CoolUntil = Time.time + 4f;
                         CocoonNet.RequestRelease(id);
                     }
                     break;
@@ -6238,15 +7042,965 @@ namespace SpiderCocoon
                     }
                     break;
                 default:
-                    if (td.Depth > 0f) td.Depth = Mathf.Max(0f, td.Depth - 5f * dt);
+                    // Won the tug-of-war: it wraps the catch half in its hole instead of climbing right out.
+                    if (td.LowHold && (td.M == Mode.Surfaced || td.M == Mode.Returning)) td.Depth = Mathf.MoveTowards(td.Depth, 0.35f, 5f * dt);
+                    else if (td.Depth > 0f) td.Depth = Mathf.Max(0f, td.Depth - 5f * dt);
                     break;
             }
+            TrapdoorBurrow.Tick(s, td.Depth);
             if (td.Depth > 0f && s.meshContainer != null)
             {
                 Vector3 p = s.meshContainer.position;
                 s.meshContainer.position = new Vector3(p.x, p.y - td.Depth, p.z);
             }
         }
+    }
+
+    // What a trapdoor spider's hiding place looks like: a round earth lid on a hinge, flush with the ground, ringed with
+    // a little silk, over a dark hole. Every game builds and animates it from the burrow depth it already knows (the
+    // owner's own, or the depth messages), so no extra network traffic. Closed while the spider waits, flips open when
+    // it goes in or bursts out, closes again afterwards and fades away once the spider has moved on.
+    // Where a trapdoor spider digs in: near the AI node it picked, on open, sunlit ground rather than inside a bush clump
+    // or in the shade of a rock (user, 24 Nov: fairer to spot the lid, and the lid is not hidden under leaves).
+    // Owner's game only (the spot reaches the others through the burrow message).
+    internal static class BurrowSite
+    {
+        internal static string Last = "";
+        private static int gridSeed = int.MinValue;
+        private static readonly Dictionary<long, int> Leaves = new Dictionary<long, int>();
+        private static readonly List<Bounds> Clumps = new List<Bounds>(); // foliage we cannot read: judged by its box
+        private static long Cell(float x, float z) { return ((long)Mathf.FloorToInt(x) << 32) ^ (uint)Mathf.FloorToInt(z); }
+
+        // Counts the leaf vertices of every readable foliage mesh per 1 m square, once per moon visit.
+        private static void BuildGrid()
+        {
+            int seed = StartOfRound.Instance != null ? StartOfRound.Instance.randomMapSeed ^ StartOfRound.Instance.currentLevelID * 7919 : 0;
+            if (seed == gridSeed) return;
+            gridSeed = seed; Leaves.Clear(); Clumps.Clear();
+            int meshes = 0, skipped = 0, verts = 0;
+            try
+            {
+                int foliage = LayerMask.NameToLayer("Foliage");
+                foreach (MeshRenderer r in UnityEngine.Object.FindObjectsOfType<MeshRenderer>())
+                {
+                    if (r == null || r.gameObject.layer != foliage || !r.enabled) continue;
+                    MeshFilter mf = r.GetComponent<MeshFilter>();
+                    Mesh m = mf != null ? mf.sharedMesh : null;
+                    if (m == null || !m.isReadable || m.vertexCount > 200000)
+                    {
+                        skipped++;
+                        Bounds b = r.bounds;
+                        if (b.size.x < 40f && b.size.z < 40f) Clumps.Add(b);
+                        continue;
+                    }
+                    Matrix4x4 w = r.transform.localToWorldMatrix;
+                    Vector3[] vs = m.vertices;
+                    for (int i = 0; i < vs.Length; i++)
+                    {
+                        Vector3 p = w.MultiplyPoint3x4(vs[i]);
+                        long c = Cell(p.x, p.z); int n; Leaves.TryGetValue(c, out n); Leaves[c] = n + 1;
+                    }
+                    meshes++; verts += vs.Length;
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Burrow site: foliage scan failed: " + e.Message); }
+            Plugin.Log.LogInfo("Burrow site: " + meshes + " foliage meshes scanned (" + verts + " leaf points), " + skipped + " could not be read (" + Clumps.Count + " judged by their size instead).");
+        }
+
+        // How many unreadable foliage clumps this point is well inside (their box shrunk by a fifth on each side).
+        private static int InClumps(Vector3 p)
+        {
+            int n = 0;
+            foreach (Bounds b in Clumps)
+            {
+                Vector3 e = b.extents * 0.8f;
+                if (Mathf.Abs(p.x - b.center.x) < e.x && Mathf.Abs(p.z - b.center.z) < e.z && p.y < b.max.y && p.y > b.min.y - 1f) n++;
+            }
+            return n;
+        }
+
+        private static int LeavesNear(Vector3 p, float r)
+        {
+            int sum = 0, k = Mathf.CeilToInt(r);
+            for (int dx = -k; dx <= k; dx++)
+                for (int dz = -k; dz <= k; dz++)
+                {
+                    if ((dx * dx + dz * dz) > (r + 0.7f) * (r + 0.7f)) continue;
+                    int n; if (Leaves.TryGetValue(Cell(p.x + dx, p.z + dz), out n)) sum += n;
+                }
+            return sum;
+        }
+
+        // Scores the node and 24 points round it (3, 5 and 7 m out); lowest score wins. Falls back to the node itself.
+        // Burrows (made or planned) of the other trapdoor spiders: a new one keeps 8 m away from them.
+        private static bool Crowded(Vector3 p, SandSpiderAI self)
+        {
+            foreach (Trapdoor.TD td in Trapdoor.AllStates())
+            {
+                if (td == null || td.Spider == null || td.Spider == self || td.Spider.isEnemyDead) continue;
+                if (td.HasHome && new Vector2(td.Home.x - p.x, td.Home.z - p.z).sqrMagnitude < 64f) return true;
+                if (td.HasNode && new Vector2(td.Node.x - p.x, td.Node.z - p.z).sqrMagnitude < 64f) return true;
+            }
+            return false;
+        }
+
+        internal static Vector3 Best(Vector3 node, SandSpiderAI self)
+        {
+            Last = "the node itself";
+            try
+            {
+                BuildGrid();
+                StartOfRound sor = StartOfRound.Instance;
+                int mask = sor.collidersAndRoomMaskAndDefault;
+                Light sun = TimeOfDay.Instance != null ? TimeOfDay.Instance.sunDirect : null;
+                Vector3 best = node; float bestScore = float.MaxValue; string bestWhy = "";
+                float nodeScore = float.MaxValue;
+                for (int ring = 0; ring <= 3; ring++)
+                {
+                    float rr = ring == 0 ? 0f : 1f + ring * 2f;
+                    int count = ring == 0 ? 1 : 8;
+                    for (int k = 0; k < count; k++)
+                    {
+                        float a = k * Mathf.PI / 4f + ring * 0.4f;
+                        Vector3 c = node + new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * rr;
+                        UnityEngine.AI.NavMeshHit nh;
+                        if (!UnityEngine.AI.NavMesh.SamplePosition(c, out nh, 1.2f, UnityEngine.AI.NavMesh.AllAreas)) continue;
+                        Vector3 p = nh.position;
+                        RaycastHit g;
+                        if (!Physics.Raycast(p + Vector3.up * 2f, Vector3.down, out g, 4f, mask, QueryTriggerInteraction.Ignore)) continue;
+                        if (g.normal.y < 0.82f) continue; // too steep for a lid
+                        int leaves = LeavesNear(g.point, TrapdoorBurrow.Radius + 0.8f);
+                        int clumps = InClumps(g.point);
+                        bool blocked = false; // a rock, tree or wall right next to it (the ground under it does not count)
+                        foreach (Collider oc in Physics.OverlapSphere(g.point + Vector3.up * 0.9f, TrapdoorBurrow.Radius + 0.2f, mask, QueryTriggerInteraction.Ignore))
+                            if (oc != null && oc != g.collider) { blocked = true; break; }
+                        bool shade = sun != null && sun.enabled && Physics.Raycast(g.point + Vector3.up * 0.3f, -sun.transform.forward, 80f, mask, QueryTriggerInteraction.Ignore);
+                        bool crowded = Crowded(g.point, self);
+                        float score = leaves + clumps * 80f + (blocked ? 400f : 0f) + (shade ? 150f : 0f) + (crowded ? 1000f : 0f) + rr * 6f;
+                        if (ring == 0) nodeScore = score;
+                        if (score < bestScore)
+                        {
+                            bestScore = score; best = g.point;
+                            bestWhy = (ring == 0 ? "the node itself" : rr.ToString("0") + " m from the node") + ": leaves " + leaves + (clumps > 0 ? ", in " + clumps + " bush clump(s)" : "") + (blocked ? ", cramped" : "") + (crowded ? ", next to another burrow" : "") + (shade ? ", shaded" : ", in the sun");
+                        }
+                    }
+                }
+                Last = bestWhy + (nodeScore < float.MaxValue && nodeScore != bestScore ? " (node scored " + nodeScore.ToString("0") + ")" : "");
+                return best;
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Burrow site choice failed: " + e.Message); return node; }
+        }
+    }
+
+    // the burrow model (made in Blender, models\burrow\build_burrow.py), read from trapdoor_burrow.obj next to the mod's
+    // DLL. A small OBJ reader: positions, normals, one part per "o", one submesh per "usemtl". Mirrored on X (OBJ is
+    // right-handed, Unity left-handed), so the triangle order is reversed too. Read once; no file = the code burrow.
+    internal static class BurrowModel
+    {
+        internal sealed class P { public List<Vector3> V = new List<Vector3>(); public List<Vector3> N = new List<Vector3>(); public List<List<int>> Subs = new List<List<int>>(); public List<string> Mats = new List<string>(); }
+        private static Dictionary<string, P> parts;
+        private static bool tried;
+        internal const string FileName = "trapdoor_burrow.obj";
+
+        internal static bool Ready() { Load(); return parts != null && parts.ContainsKey("Burrow_Lid") && parts.ContainsKey("Burrow_Rim"); }
+        internal static bool Has(string name) { Load(); return parts != null && parts.ContainsKey(name); }
+        internal static IEnumerable<string> Names(string prefix) { Load(); if (parts != null) foreach (string k in parts.Keys) if (k.StartsWith(prefix)) yield return k; }
+
+        private static void Load()
+        {
+            if (tried) return;
+            tried = true;
+            string path = "?";
+            try
+            {
+                path = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(typeof(Plugin).Assembly.Location), FileName);
+                if (!System.IO.File.Exists(path)) { Plugin.Log.LogInfo("Trapdoor burrow model: no " + FileName + " next to the mod; using the burrow made in code."); return; }
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                var pos = new List<Vector3>(); var nrm = new List<Vector3>();
+                var res = new Dictionary<string, P>();
+                P cur = null; Dictionary<long, int> map = null; List<int> sub = null;
+                foreach (string raw in System.IO.File.ReadAllLines(path))
+                {
+                    string line = raw.Trim();
+                    if (line.Length < 2 || line[0] == '#') continue;
+                    string[] w = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    switch (w[0])
+                    {
+                        case "v": pos.Add(new Vector3(-float.Parse(w[1], ci), float.Parse(w[2], ci), float.Parse(w[3], ci))); break;
+                        case "vn": nrm.Add(new Vector3(-float.Parse(w[1], ci), float.Parse(w[2], ci), float.Parse(w[3], ci))); break;
+                        case "o": cur = new P(); res[w[1]] = cur; map = new Dictionary<long, int>(); sub = null; break;
+                        case "usemtl": if (cur != null) { sub = new List<int>(); cur.Subs.Add(sub); cur.Mats.Add(w.Length > 1 ? w[1] : ""); } break;
+                        case "f":
+                        {
+                            if (cur == null) break;
+                            if (sub == null) { sub = new List<int>(); cur.Subs.Add(sub); cur.Mats.Add(""); }
+                            int[] ids = new int[w.Length - 1];
+                            for (int k = 1; k < w.Length; k++)
+                            {
+                                string[] t = w[k].Split('/');
+                                int vi = int.Parse(t[0], ci) - 1;
+                                int ni = t.Length > 2 && t[2].Length > 0 ? int.Parse(t[2], ci) - 1 : -1;
+                                long key = vi * 1000003L + ni;
+                                int id;
+                                if (!map.TryGetValue(key, out id))
+                                {
+                                    id = cur.V.Count; map[key] = id;
+                                    cur.V.Add(pos[vi]); cur.N.Add(ni >= 0 ? nrm[ni] : Vector3.up);
+                                }
+                                ids[k - 1] = id;
+                            }
+                            for (int k = 1; k + 1 < ids.Length; k++) { sub.Add(ids[0]); sub.Add(ids[k + 1]); sub.Add(ids[k]); } // mirrored: reverse
+                            break;
+                        }
+                    }
+                }
+                parts = res;
+                int verts = 0; foreach (P q in res.Values) verts += q.V.Count;
+                Plugin.Log.LogInfo("Trapdoor burrow model: loaded " + FileName + " (" + res.Count + " parts: " + string.Join(", ", new List<string>(res.Keys).ToArray()) + "; " + verts + " vertices).");
+            }
+            catch (Exception e) { parts = null; Plugin.Log.LogWarning("Trapdoor burrow model: could not read " + path + " (" + e.Message + "); using the burrow made in code."); }
+        }
+
+        // A fresh mesh of one part. warp moves each vertex (e.g. to fit a slope), uv gives its texture coordinate.
+        internal static Mesh Build(string name, Func<Vector3, Vector3> warp, Func<Vector3, Vector2> uv)
+        {
+            P q = parts[name];
+            Vector3[] v = new Vector3[q.V.Count]; Vector2[] t = new Vector2[q.V.Count];
+            for (int i = 0; i < v.Length; i++) { v[i] = warp != null ? warp(q.V[i]) : q.V[i]; t[i] = uv != null ? uv(q.V[i]) : Vector2.zero; }
+            Mesh m = new Mesh { name = "HungToDry_" + name };
+            m.vertices = v; m.normals = q.N.ToArray(); m.uv = t;
+            m.subMeshCount = q.Subs.Count;
+            for (int i = 0; i < q.Subs.Count; i++) m.SetTriangles(q.Subs[i], i);
+            m.RecalculateBounds();
+            return m;
+        }
+
+        internal static string MatOf(string name, int sub) { P q = parts[name]; return sub < q.Mats.Count ? q.Mats[sub] : ""; }
+        internal static int SubCount(string name) { return parts[name].Subs.Count; }
+
+        // The lid's hinge: middle of its edge on the -Z side.
+        internal static Vector3 Hinge()
+        {
+            P q = parts["Burrow_Lid"];
+            float minZ = float.MaxValue; foreach (Vector3 p in q.V) if (p.z < minZ) minZ = p.z;
+            return new Vector3(0f, 0.02f, minZ);
+        }
+    }
+
+    internal static class TrapdoorBurrow
+    {
+        internal class B
+        {
+            public GameObject Root; public Transform Lid; public Vector3 Pos;
+            public float Angle, Depth, LastTick, SurfacedAt = -1f, BornAt; public bool Burst;
+        }
+        private static readonly Dictionary<int, B> BySpider = new Dictionary<int, B>();
+        // Round over: remove every burrow. They live in the game's permanent scene (not the moon's), so without this one
+        // could still be standing when the ship lands on the next moon (combined10, review: seen still there in orbit).
+        internal static void PruneGone()
+        {
+            int n = 0;
+            foreach (B b in All) if (b != null && b.Root != null) { UnityEngine.Object.Destroy(b.Root); n++; }
+            All.Clear(); BySpider.Clear(); FirstSeen.Clear();
+            if (n > 0) Plugin.Dbg("Round over: removed " + n + " trapdoor burrow(s).");
+        }
+        private static readonly Dictionary<int, float> FirstSeen = new Dictionary<int, float>();
+
+        // ---- the owner's burrow spot, sent to every game so they all build it in the same place ----
+        internal const string PlaceName = "HungToDry.TdBurrow";
+        private static void SendPlace(ulong spider, Vector3 at)
+        {
+            try
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm == null || nm.CustomMessagingManager == null || !nm.IsListening) return;
+                using (Unity.Netcode.FastBufferWriter w = new Unity.Netcode.FastBufferWriter(32, Unity.Collections.Allocator.Temp))
+                {
+                    w.WriteValueSafe(spider); w.WriteValueSafe(at);
+                    if (nm.IsServer) nm.CustomMessagingManager.SendNamedMessageToAll(PlaceName, w);
+                    else nm.CustomMessagingManager.SendNamedMessage(PlaceName, Unity.Netcode.NetworkManager.ServerClientId, w);
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Trapdoor burrow message failed: " + e.Message); }
+        }
+
+        internal static void OnPlace(ulong sender, Unity.Netcode.FastBufferReader reader)
+        {
+            try
+            {
+                ulong spider; Vector3 at;
+                reader.ReadValueSafe(out spider); reader.ReadValueSafe(out at);
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm != null && nm.IsServer && sender != Unity.Netcode.NetworkManager.ServerClientId) { SendPlace(spider, at); return; }
+                Unity.Netcode.NetworkObject no;
+                if (nm == null || nm.SpawnManager == null || !nm.SpawnManager.SpawnedObjects.TryGetValue(spider, out no) || no == null) return;
+                SandSpiderAI s = no.GetComponentInChildren<SandSpiderAI>();
+                if (s == null || s.IsOwner) return;
+                // Put this game's copy of the spider exactly where the owner has it (the game skips the last small move).
+                s.serverPosition = at; s.meshContainerServerPosition = at;
+                int id = s.GetInstanceID();
+                B b;
+                if (BySpider.TryGetValue(id, out b) && b != null && b.Root != null)
+                {
+                    if (new Vector2(b.Pos.x - at.x, b.Pos.z - at.z).magnitude < 0.25f) return;
+                    UnityEngine.Object.Destroy(b.Root); All.Remove(b);
+                    Plugin.Log.LogInfo("Trapdoor burrow: moved this game's burrow to where the spider's owner has it.");
+                }
+                B nb = Create(s, at);
+                if (nb != null) { BySpider[id] = nb; nb.Depth = Trapdoor.DepthOf(s); nb.LastTick = Time.time; }
+            }
+            catch (Exception e) { Plugin.Log.LogError("Trapdoor burrow message read failed: " + e); }
+        }
+        private static readonly List<B> All = new List<B>();
+        private static Material blackMat, silkMat, brownMat, lineMat;
+
+        // A thin flat silk strand on the ground, from radius r0 out to r1 along angle a (sloping slightly down at the end).
+        private static Mesh Strand(float a, float r0, float r1, float width)
+        {
+            Vector3 d = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)), side = new Vector3(-d.z, 0f, d.x) * (width * 0.5f);
+            Vector3 p0 = d * r0 + Vector3.up * 0.035f, p1 = d * r1 + Vector3.up * -0.02f;
+            Mesh m = new Mesh();
+            // Tapers to a third of its width at the far end: plain near the lid, faint out at the reach.
+            m.vertices = new[] { p0 - side, p0 + side, p1 - side * 0.35f, p1 + side * 0.35f };
+            m.uv = new[] { new Vector2(0, 0), new Vector2(1, 0), new Vector2(0, 1), new Vector2(1, 1) };
+            m.triangles = new[] { 0, 2, 1, 1, 2, 3 };
+            m.RecalculateNormals(); FixUp(m); m.RecalculateBounds();
+            return m;
+        }
+        private static bool silkSearched;
+        internal const float Radius = 1.05f, OpenAngle = 115f; // was 0.75 (user: bigger burrow)
+
+        // Called every frame for a trapdoor spider, on every game, with how deep it is right now.
+        internal static void Tick(SandSpiderAI s, float depth, bool remote = false)
+        {
+            try
+            {
+                if (s == null) return;
+                int id = s.GetInstanceID();
+                B b; BySpider.TryGetValue(id, out b);
+                if (b != null && b.Root == null) { BySpider.Remove(id); b = null; }
+                if (remote && depth > 0.01f && !FirstSeen.ContainsKey(id)) FirstSeen[id] = Time.time;
+                if (remote && depth <= 0.01f) FirstSeen.Remove(id);
+                float seen;
+                bool mayGuess = !remote || (FirstSeen.TryGetValue(id, out seen) && Time.time - seen > 2f); // the owner's message normally comes first
+                if (depth > (remote ? 0.5f : 0.01f) && (b != null || mayGuess))
+                {
+                    Vector3 here = s.transform.position;
+                    if (b == null || new Vector2(b.Pos.x - here.x, b.Pos.z - here.z).magnitude > 2f)
+                    {
+                        b = Create(s, here);
+                        if (b == null) return;
+                        BySpider[id] = b;
+                    }
+                }
+                if (b == null) return;
+                b.Depth = Mathf.Max(0f, depth); b.LastTick = Time.time;
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Trapdoor burrow tick failed: " + e.Message); }
+        }
+
+        // Every frame from the plugin: open and close the lids, tidy up old burrows.
+        internal static void TickAll()
+        {
+            if (All.Count == 0) return;
+            float dt = Time.deltaTime, max = Plugin.TrapdoorDepth.Value;
+            for (int i = All.Count - 1; i >= 0; i--)
+            {
+                B b = All[i];
+                try
+                {
+                    if (b.Root == null) { All.RemoveAt(i); continue; }
+                    float depth = Time.time - b.LastTick > 0.5f ? 0f : b.Depth;
+                    bool waiting = depth >= max - 0.05f;
+                    bool moving = depth > 0.01f && !waiting;
+                    float target;
+                    if (waiting) { target = 0f; b.SurfacedAt = -1f; b.Burst = true; }
+                    else if (moving) { target = OpenAngle; b.SurfacedAt = -1f; }
+                    else
+                    {
+                        if (b.SurfacedAt < 0f) b.SurfacedAt = Time.time;
+                        target = Time.time - b.SurfacedAt < 3f ? OpenAngle : 0f;
+                    }
+                    if (target > b.Angle && b.Angle < 5f && b.Burst) { Trapdoor.Puff(b.Pos); b.Burst = false; }
+                    b.Angle = Mathf.MoveTowards(b.Angle, target, (target > b.Angle ? 700f : 160f) * dt);
+                    if (b.Lid != null) b.Lid.localRotation = Quaternion.Euler(-b.Angle, 0f, 0f);
+                    bool owned = false;
+                    foreach (B o in BySpider.Values) if (o == b) { owned = true; break; }
+                    if (b.SurfacedAt > 0f && b.Angle < 0.5f && Time.time - b.SurfacedAt > (owned ? 60f : 30f) && Time.time - b.BornAt > 10f)
+                    {
+                        UnityEngine.Object.Destroy(b.Root); All.RemoveAt(i);
+                        Plugin.Dbg("Trapdoor burrow at " + b.Pos.ToString("F1") + " filled in (the spider moved on).");
+                    }
+                }
+                catch (Exception e) { All.RemoveAt(i); Plugin.Log.LogWarning("Trapdoor burrow update failed: " + e.Message); }
+            }
+        }
+
+        private static B Create(SandSpiderAI s, Vector3 at)
+        {
+            RaycastHit hit;
+            if (!Physics.Raycast(at + Vector3.up * 3f, Vector3.down, out hit, 10f, StartOfRound.Instance.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore))
+            { Plugin.Log.LogWarning("Trapdoor burrow: no ground found under the spider at " + at.ToString("F1") + "."); return null; }
+            int seed = unchecked(Mathf.RoundToInt(hit.point.x * 10f) * 73856093 ^ Mathf.RoundToInt(hit.point.z * 10f) * 19349663);
+            System.Random rnd = new System.Random(seed);
+            // Lift: the highest bump round the rim, measured from the ground's own slope (the burrow is tilted to it), so
+            // a burrow on a hillside is not raised by the slope itself (td14; before it took the highest point).
+            Vector3 nrm = hit.normal.y > 0.5f ? hit.normal : Vector3.up;
+            float lift = 0f;
+            for (int k = 0; k < 8; k++)
+            {
+                float a = k * Mathf.PI / 4f;
+                Vector3 e = hit.point + new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * (Radius * 1.1f);
+                RaycastHit eh;
+                if (Physics.Raycast(e + Vector3.up * 2f, Vector3.down, out eh, 4f, StartOfRound.Instance.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore))
+                    lift = Mathf.Max(lift, Vector3.Dot(eh.point - hit.point, nrm));
+            }
+            lift = Mathf.Min(lift, 0.25f);
+            Material ground = Earth(GroundMaterial(hit, s));
+            Renderer groundR = hit.collider != null ? (hit.collider.GetComponent<Renderer>() ?? hit.collider.GetComponentInParent<Renderer>()) : null;
+            PartLayers = groundR != null ? groundR.renderingLayerMask : 0u;
+            Material black = Plain(s, ref blackMat, new Color(0.015f, 0.012f, 0.01f));
+            Material silk = Silk(s);
+
+            GameObject root = new GameObject("HungToDry_TrapdoorBurrow");
+            Vector3 n = hit.normal.y > 0.5f ? hit.normal : Vector3.up;
+            root.transform.position = hit.point + n * (lift + 0.03f);
+            root.transform.rotation = Quaternion.FromToRotation(Vector3.up, n) * Quaternion.Euler(0f, (float)rnd.NextDouble() * 360f, 0f);
+            // the ground's own texture laid flat by world position. Copying the ground mesh's texture coordinates
+            // (GroundUv) gave an almost plain lid: on Experimentation they are stretched (u barely moves over 34 m).
+            UvF = Planar(ground, root.transform);
+            float ph1 = (float)rnd.NextDouble() * 6.28f, ph2 = (float)rnd.NextDouble() * 6.28f;
+            Func<float, float> rad = a => Radius * (1f + 0.05f * Mathf.Sin(3f * a + ph1) + 0.03f * Mathf.Sin(7f * a + ph2));
+
+            bool model = Plugin.TrapdoorBurrowModel.Value && BurrowModel.Ready();
+            Part(root.transform, "Hole", Annulus(rad, 0f, 0.97f, 0.012f, 0.012f), black, false);
+            if (model)
+            {
+                // the model's earth rim; its outer edge is lowered by the ground's bumps (lift) so it meets the ground.
+                float lf = lift;
+                Part(root.transform, "Rim", BurrowModel.Build("Burrow_Rim",
+                    p => { float rr = new Vector2(p.x, p.z).magnitude / Radius; return new Vector3(p.x, p.y - lf * Mathf.Clamp01((rr - 0.97f) / 0.43f), p.z); },
+                    p => UV(p.x, p.z)), ground, true);
+            }
+            else Part(root.transform, "Lip", Annulus(rad, 0.97f, 1.4f, 0.03f, -0.08f - lift), ground, true);
+            Part(root.transform, "Silk", Annulus(rad, 0.975f, 1.025f, 0.036f, 0.034f), silk, false); // a thin silk seam (was a wide pale ring)
+            // Silk trip-lines fanning out to the reach: the trigger, and a warning for sharp-eyed players.
+            Material line = Plain(s, ref lineMat, new Color(0.6f, 0.58f, 0.53f));
+            float reach = Plugin.TrapdoorReachMeters.Value;
+            for (int k = 0; k < 7; k++)
+            {
+                float a = (k + (float)rnd.NextDouble() * 0.8f) * Mathf.PI * 2f / 7f;
+                float len = reach * (0.75f + (float)rnd.NextDouble() * 0.25f); // longer lines (were 0.6-1.0 of the reach)
+                Part(root.transform, "TripLine", Strand(a, rad(a) * 1.0f, Mathf.Max(len, rad(a) + 0.6f), 0.012f), line, false);
+            }
+
+            GameObject hinge = new GameObject("LidHinge");
+            hinge.transform.SetParent(root.transform, false);
+            if (model)
+            {
+                Vector3 hp = BurrowModel.Hinge();
+                hinge.transform.localPosition = hp;
+                GameObject lidM = Part(hinge.transform, "Lid", BurrowModel.Build("Burrow_Lid", null, p => UV(p.x, p.z)), ground, true);
+                lidM.transform.localPosition = -hp;
+                Renderer lmr = lidM.GetComponent<Renderer>();
+                if (lmr != null)
+                {
+                    Material[] ms = new Material[BurrowModel.SubCount("Burrow_Lid")];
+                    for (int i = 0; i < ms.Length; i++) ms[i] = BurrowModel.MatOf("Burrow_Lid", i).Contains("Silk") ? silk : ground;
+                    lmr.sharedMaterials = ms;
+                }
+                // Underground: the tunnel, its silk lining and roots (seen by a buried victim; the ground hides them from above).
+                Material deep = Deep(ground);
+                Func<Vector3, Vector2> wallUv = p => new Vector2(Mathf.Atan2(p.z, p.x) * Radius / 3.5f, p.y / 3.5f);
+                if (BurrowModel.Has("Burrow_Tunnel")) Part(root.transform, "Tunnel", BurrowModel.Build("Burrow_Tunnel", null, wallUv), deep, false);
+                if (BurrowModel.Has("Burrow_Silk")) Part(root.transform, "TunnelSilk", BurrowModel.Build("Burrow_Silk", null, wallUv), TunnelSilk(silk), false);
+                foreach (string rn in new List<string>(BurrowModel.Names("Burrow_Root")))
+                    Part(root.transform, rn, BurrowModel.Build(rn, null, wallUv), deep, false);
+            }
+            else
+            {
+                hinge.transform.localPosition = new Vector3(0f, 0.02f, -Radius);
+                GameObject lid = Part(hinge.transform, "Lid", Lid(rad, 0.045f, 0.02f), ground, true);
+                lid.transform.localPosition = new Vector3(0f, 0f, Radius);
+                Renderer lr = lid.GetComponent<Renderer>();
+                if (lr != null) lr.sharedMaterials = new[] { ground, ground };
+                // Silk lining under the lid: real web strands just below its earth underside.
+                Part(lid.transform, "LidSilk", Annulus(rad, 0f, 0.95f, -0.006f, -0.006f, true), silk, false);
+            }
+            UvF = null; PartLayers = 0u;
+
+            B b = new B { Root = root, Lid = hinge.transform, Pos = hit.point, BornAt = Time.time, LastTick = Time.time, Burst = false };
+            All.Add(b);
+            if (s.IsOwner && s.NetworkObject != null) SendPlace(s.NetworkObjectId, at);
+            Plugin.Log.LogInfo("Trapdoor burrow made at " + hit.point.ToString("F1") + (model ? " from the model" : " in code") + " (lid: " + (ground != null ? ground.name : "none") + ", silk: " + (silk != null ? silk.name : "none") + ", ground: " + (hit.collider != null ? hit.collider.name : "?") + ", texture laid flat: " + lastUvOk + ").");
+            return b;
+        }
+
+        private static GameObject Part(Transform parent, string name, Mesh mesh, Material mat, bool shadows)
+        {
+            GameObject g = new GameObject(name);
+            g.transform.SetParent(parent, false);
+            g.AddComponent<MeshFilter>().sharedMesh = mesh;
+            MeshRenderer r = g.AddComponent<MeshRenderer>();
+            if (mat != null) r.sharedMaterial = mat;
+            r.shadowCastingMode = shadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
+            if (PartLayers != 0u) r.renderingLayerMask = PartLayers;
+            return g;
+        }
+
+        private static uint PartLayers;
+        // Texture coordinates for a point (x, z) of the burrow: lined up with the ground's own texture when it could be
+        // read at the spot (so the pattern runs on across the lid), otherwise a plain planar mapping.
+        private static Func<float, float, Vector2> UvF;
+        private static Vector2 UV(float x, float z) { return UvF != null ? UvF(x, z) : new Vector2(x, z) * 0.6f; }
+
+        // One repeat of the ground texture every TileMetres, whatever tiling the material has (it is divided out).
+        private const float TileMetres = 3.5f;
+        private static Func<float, float, Vector2> Planar(Material m, Transform root)
+        {
+            Vector2 til = Vector2.one;
+            try
+            {
+                if (m != null && m.HasProperty("_BaseColorMap")) til = m.GetTextureScale("_BaseColorMap");
+                else if (m != null && m.HasProperty("_MainTex")) til = m.GetTextureScale("_MainTex");
+            }
+            catch (Exception) { }
+            if (Mathf.Abs(til.x) < 1e-4f) til.x = 1f;
+            if (Mathf.Abs(til.y) < 1e-4f) til.y = 1f;
+            lastUvOk = true;
+            return (x, z) => { Vector3 w = root.TransformPoint(new Vector3(x, 0f, z)); return new Vector2(w.x / (TileMetres * til.x), w.z / (TileMetres * til.y)); };
+        }
+
+        // A flat ring (or a full disc when inner is 0) from inner*r(a) to outer*r(a); heights at the inner and outer edge.
+        private static Mesh Annulus(Func<float, float> rad, float inner, float outer, float yIn, float yOut, bool facingDown = false)
+        {
+            const int seg = 40;
+            List<Vector3> v = new List<Vector3>(); List<Vector2> uv = new List<Vector2>(); List<int> t = new List<int>();
+            for (int i = 0; i <= seg; i++)
+            {
+                float a = i * Mathf.PI * 2f / seg, r = rad(a), c = Mathf.Cos(a), sn = Mathf.Sin(a);
+                Vector3 pi = new Vector3(c * r * inner, yIn, sn * r * inner), po = new Vector3(c * r * outer, yOut, sn * r * outer);
+                v.Add(pi); v.Add(po); uv.Add(UV(pi.x, pi.z)); uv.Add(UV(po.x, po.z));
+                if (i < seg) { int k = i * 2; t.AddRange(new[] { k, k + 2, k + 1, k + 1, k + 2, k + 3 }); }
+            }
+            Mesh m = new Mesh(); m.SetVertices(v); m.SetUVs(0, uv); m.SetTriangles(t, 0);
+            m.RecalculateNormals(); FixUp(m);
+            if (facingDown) { int[] tt = m.triangles; for (int i = 0; i < tt.Length; i += 3) { int x = tt[i]; tt[i] = tt[i + 1]; tt[i + 1] = x; } m.triangles = tt; m.RecalculateNormals(); }
+            m.RecalculateBounds(); return m;
+        }
+
+        // Lid: domed top + edge (submesh 0, earth) and underside (submesh 1, silk).
+        private static Mesh Lid(Func<float, float> rad, float thick, float dome)
+        {
+            const int seg = 40;
+            List<Vector3> v = new List<Vector3>(); List<Vector2> uv = new List<Vector2>(); List<int> top = new List<int>(), bot = new List<int>();
+            v.Add(new Vector3(0f, thick + dome, 0f)); uv.Add(UV(0f, 0f)); // was (0,0) whatever the rim had: stretched the texture into rings / a plain smear
+            for (int i = 0; i <= seg; i++) { float a = i * Mathf.PI * 2f / seg, r = rad(a); Vector3 p = new Vector3(Mathf.Cos(a) * r, thick, Mathf.Sin(a) * r); v.Add(p); uv.Add(UV(p.x, p.z)); }
+            for (int i = 0; i < seg; i++) top.AddRange(new[] { 0, 2 + i, 1 + i });
+            int side = v.Count;
+            for (int i = 0; i <= seg; i++)
+            {
+                float a = i * Mathf.PI * 2f / seg, r = rad(a), c = Mathf.Cos(a), sn = Mathf.Sin(a);
+                v.Add(new Vector3(c * r, thick, sn * r)); v.Add(new Vector3(c * r * 0.97f, 0f, sn * r * 0.97f));
+                uv.Add(new Vector2(i / (float)seg, 1f)); uv.Add(new Vector2(i / (float)seg, 0f));
+            }
+            for (int i = 0; i < seg; i++) { int k = side + i * 2; top.AddRange(new[] { k, k + 2, k + 1, k + 1, k + 2, k + 3 }); }
+            int bc = v.Count; v.Add(Vector3.zero); uv.Add(UV(0f, 0f));
+            for (int i = 0; i <= seg; i++) { float a = i * Mathf.PI * 2f / seg, r = rad(a) * 0.97f; Vector3 p = new Vector3(Mathf.Cos(a) * r, 0f, Mathf.Sin(a) * r); v.Add(p); uv.Add(UV(p.x, p.z)); }
+            for (int i = 0; i < seg; i++) bot.AddRange(new[] { bc, bc + 1 + i, bc + 2 + i });
+            Mesh m = new Mesh(); m.subMeshCount = 2; m.SetVertices(v); m.SetUVs(0, uv); m.SetTriangles(top, 0); m.SetTriangles(bot, 1);
+            m.RecalculateNormals(); m.RecalculateBounds(); return m;
+        }
+
+        // Ring winding can face down; flip the triangles if so, so it is seen from above.
+        private static void FixUp(Mesh m)
+        {
+            Vector3[] n = m.normals; if (n.Length == 0 || n[0].y >= 0f) return;
+            int[] t = m.triangles; for (int i = 0; i < t.Length; i += 3) { int x = t[i]; t[i] = t[i + 1]; t[i + 1] = x; }
+            m.triangles = t; m.RecalculateNormals();
+        }
+
+        // read live; it used to stay true for the rest of the session once any model burrow was made.
+        internal static bool ModelInUse { get { return Plugin.TrapdoorBurrowModel.Value && BurrowModel.Ready(); } }
+        private static readonly Dictionary<Material, Material> DeepCache = new Dictionary<Material, Material>();
+        // The tunnel walls: the ground's material, much darker (deep earth), its texture repeating every 3.5 m of wall.
+        private static Material Deep(Material g)
+        {
+            if (g == null) return null;
+            Material m;
+            if (DeepCache.TryGetValue(g, out m) && m != null) return m;
+            m = new Material(g);
+            try
+            {
+                if (m.HasProperty("_BaseColor")) { Color c = m.GetColor("_BaseColor"); m.SetColor("_BaseColor", new Color(c.r * 0.5f, c.g * 0.45f, c.b * 0.42f, c.a)); }
+                if (m.HasProperty("_BaseColorMap")) m.SetTextureScale("_BaseColorMap", Vector2.one);
+                if (m.HasProperty("_NormalMap")) m.SetTextureScale("_NormalMap", Vector2.one);
+                if (m.HasProperty("_Smoothness")) m.SetFloat("_Smoothness", 0f);
+            }
+            catch (Exception) { }
+            OneSided(m); // the ground's material is double-sided; the walls must vanish from outside (viewing port)
+            DeepCache[g] = m;
+            return m;
+        }
+
+        // HDRP/Lit: draw only the front faces (so a wall that faces into the tunnel is invisible from outside it).
+        internal static void OneSided(Material m)
+        {
+            try
+            {
+                if (m == null) return;
+                if (m.HasProperty("_DoubleSidedEnable")) m.SetFloat("_DoubleSidedEnable", 0f);
+                if (m.HasProperty("_CullMode")) m.SetFloat("_CullMode", 2f);          // Back
+                if (m.HasProperty("_CullModeForward")) m.SetFloat("_CullModeForward", 2f);
+                m.DisableKeyword("_DOUBLESIDED_ON");
+                m.doubleSidedGI = false;
+            }
+            catch (Exception) { }
+        }
+
+        private static Material tunnelSilk;
+        // The silk lining's own one-sided copy of the web material (the web itself stays as it is everywhere else).
+        private static Material TunnelSilk(Material silk)
+        {
+            if (silk == null) return null;
+            if (tunnelSilk == null) { tunnelSilk = new Material(silk); tunnelSilk.name = silk.name + " (tunnel)"; OneSided(tunnelSilk); }
+            return tunnelSilk;
+        }
+
+        private static readonly Dictionary<Material, Material> EarthCache = new Dictionary<Material, Material>();
+        // A darker copy of the ground's material: freshly turned earth.
+        private static Material Earth(Material g)
+        {
+            if (g == null) return null;
+            Material m;
+            if (EarthCache.TryGetValue(g, out m) && m != null) return m;
+            m = new Material(g);
+            try
+            {
+                // 0.9 (was 0.78): only a shade darker than the ground round it, so the lid does not stand out as a disc.
+                if (m.HasProperty("_BaseColor")) { Color c = m.GetColor("_BaseColor"); m.SetColor("_BaseColor", new Color(c.r * 0.9f, c.g * 0.9f, c.b * 0.9f, c.a)); }
+                if (m.HasProperty("_Color")) { Color c = m.GetColor("_Color"); m.SetColor("_Color", new Color(c.r * 0.9f, c.g * 0.9f, c.b * 0.9f, c.a)); }
+                if (m.HasProperty("_Smoothness")) m.SetFloat("_Smoothness", 0f);
+            }
+            catch (Exception) { }
+            EarthCache[g] = m;
+            return m;
+        }
+
+        private static Material GroundMaterial(RaycastHit hit, SandSpiderAI s)
+        {
+            try
+            {
+                Terrain terr = hit.collider != null ? hit.collider.GetComponent<Terrain>() : null;
+                if (terr != null && terr.materialTemplate != null) return terr.materialTemplate;
+                Renderer gr = hit.collider != null ? (hit.collider.GetComponent<Renderer>() ?? hit.collider.GetComponentInParent<Renderer>()) : null;
+                if (gr != null && gr.sharedMaterial != null) return gr.sharedMaterial;
+            }
+            catch (Exception) { }
+            return Trapdoor.DirtMaterial() ?? Plain(s, ref brownMat, new Color(0.24f, 0.16f, 0.09f));
+        }
+
+        private static bool lastUvOk;
+        // Reads the ground's texture coordinate at the spot and 1 m to either side, and returns a mapping from burrow
+        // points to ground texture coordinates (null if the ground's mesh cannot tell us).
+        private static Func<float, float, Vector2> GroundUv(RaycastHit hit, Transform root)
+        {
+            lastUvOk = false;
+            try
+            {
+                if (!(hit.collider is MeshCollider)) return null;
+                Vector2 c0 = hit.textureCoord;
+                RaycastHit hx, hz;
+                int mask = StartOfRound.Instance.collidersAndRoomMaskAndDefault;
+                if (!Physics.Raycast(hit.point + Vector3.right + Vector3.up * 2f, Vector3.down, out hx, 4f, mask, QueryTriggerInteraction.Ignore) || hx.collider != hit.collider) return null;
+                if (!Physics.Raycast(hit.point + Vector3.forward + Vector3.up * 2f, Vector3.down, out hz, 4f, mask, QueryTriggerInteraction.Ignore) || hz.collider != hit.collider) return null;
+                Vector2 dx = hx.textureCoord - c0, dz = hz.textureCoord - c0;
+                if (c0 == Vector2.zero && dx == Vector2.zero) return null;
+                Vector3 origin = hit.point;
+                lastUvOk = true;
+                return (x, z) => { Vector3 w = root.TransformPoint(new Vector3(x, 0f, z)) - origin; return c0 + dx * w.x + dz * w.z; };
+            }
+            catch (Exception) { return null; }
+        }
+
+        private static Material Silk(SandSpiderAI s)
+        {
+            if (!silkSearched)
+            {
+                silkSearched = true;
+                try
+                {
+                    // The game's own spider web (the trap webs bunker spiders lay).
+                    GameObject web = s != null ? s.webTrapPrefab : null;
+                    Renderer wr = web != null ? web.GetComponentInChildren<Renderer>(true) : null;
+                    if (wr != null && wr.sharedMaterial != null) silkMat = wr.sharedMaterial;
+                }
+                catch (Exception) { }
+                Plugin.Log.LogInfo("Trapdoor burrow: silk material " + (silkMat != null ? "'" + silkMat.name + "'" : "not found, using a pale colour"));
+                if (silkMat == null) { Material tmp = null; silkMat = Plain(s, ref tmp, new Color(0.62f, 0.6f, 0.54f)); }
+            }
+            return silkMat;
+        }
+
+        // A plain coloured copy of the spider's own (HDRP Lit) material.
+        private static Material Plain(SandSpiderAI s, ref Material cache, Color c)
+        {
+            if (cache != null) return cache;
+            Renderer src = s != null ? s.GetComponentInChildren<Renderer>() : null;
+            if (src == null || src.sharedMaterial == null) return null;
+            Material m = new Material(src.sharedMaterial);
+            try { m.SetTexture("_BaseColorMap", null); m.SetTexture("_NormalMap", null); m.SetTexture("_MaskMap", null); m.SetColor("_BaseColor", c); m.color = c; m.SetFloat("_Smoothness", 0f); m.SetFloat("_Metallic", 0f); } catch (Exception) { }
+            cache = m; return m;
+        }
+    }
+
+    // The trapdoor spider's grab: it lunges half out of its burrow and holds a player who stepped on its trip-lines.
+    // Tug-of-war: the grip creeps up by itself, every press of the struggle key pushes it back. The more it grips, the
+    // more of its legs close round the victim, who is pulled towards the hole. Full grip: dragged under (wrapped, buried).
+    // No grip: it lets go and drops back in. The VICTIM's game runs the key and owns the grip value; every game shows the
+    // legs from it. One named message carries it all (relayed by the host when a joiner sends it).
+    internal static class TrapdoorGrip
+    {
+        internal const string Name = "HungToDry.TdGrip";
+        // Start: only the spider's owner sends it (the lunge). Hold: the victim's grip updates. Lost/Escaped: the victim's
+        // game says how it ended; Abort: the owner let go. A message for a grip that is not running is ignored (td12:
+        // a late Hold used to restart a grip the spider had just let go of, and the victim was dragged under anyway).
+        internal const byte Hold = 0, Lost = 1, Escaped = 2, Abort = 3, Start = 4, StartStalk = 5;
+
+        internal class G { public int Victim = -1; public float Grip; public bool Active; public float Last; public float NextSend; public bool Mine; public bool FrozeMove; public int[] Order; public bool Done; public bool Stalk; }
+        private static readonly System.Reflection.FieldInfo TurnTarget = AccessTools.Field(typeof(SandSpiderAI), "meshContainerTargetRotation");
+        private static readonly System.Reflection.FieldInfo SpoolingF = AccessTools.Field(typeof(SandSpiderAI), "spoolingPlayerBody");
+        private static readonly Dictionary<ulong, G> Grips = new Dictionary<ulong, G>();
+        internal static void PruneGone()
+        {
+            List<ulong> gone = new List<ulong>();
+            foreach (KeyValuePair<ulong, G> kv in Grips) if (!kv.Value.Active || !Trapdoor.Spawned(kv.Key)) gone.Add(kv.Key);
+            foreach (ulong k in gone) Grips.Remove(k);
+        }
+
+        internal static bool Gripping(SandSpiderAI s)
+        {
+            G g; return s != null && s.NetworkObject != null && Grips.TryGetValue(s.NetworkObjectId, out g) && g.Active;
+        }
+
+        // ---- sending ----
+        internal static void Send(ulong spider, int victim, float grip, byte phase)
+        {
+            try
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm == null || nm.CustomMessagingManager == null) return;
+                using (Unity.Netcode.FastBufferWriter w = new Unity.Netcode.FastBufferWriter(32, Unity.Collections.Allocator.Temp))
+                {
+                    w.WriteValueSafe(spider); w.WriteValueSafe(victim); w.WriteValueSafe(grip); w.WriteValueSafe(phase);
+                    if (nm.IsServer) nm.CustomMessagingManager.SendNamedMessageToAll(Name, w);
+                    else nm.CustomMessagingManager.SendNamedMessage(Name, Unity.Netcode.NetworkManager.ServerClientId, w);
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Trapdoor grip message failed: " + e.Message); }
+        }
+
+        internal static void OnMessage(ulong sender, Unity.Netcode.FastBufferReader reader)
+        {
+            try
+            {
+                ulong spider; int victim; float grip; byte phase;
+                reader.ReadValueSafe(out spider); reader.ReadValueSafe(out victim); reader.ReadValueSafe(out grip); reader.ReadValueSafe(out phase);
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                // A joiner's message: the host passes it on to everyone (itself included, so it is applied once, below).
+                if (nm != null && nm.IsServer && sender != Unity.Netcode.NetworkManager.ServerClientId) { Send(spider, victim, grip, phase); return; }
+                Apply(spider, victim, grip, phase);
+            }
+            catch (Exception e) { Plugin.Log.LogError("Trapdoor grip message read failed: " + e); }
+        }
+
+        private static SandSpiderAI SpiderById(ulong id)
+        {
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            Unity.Netcode.NetworkObject no;
+            if (nm == null || nm.SpawnManager == null || !nm.SpawnManager.SpawnedObjects.TryGetValue(id, out no) || no == null) return null;
+            return no.GetComponentInChildren<SandSpiderAI>();
+        }
+
+        private static void Apply(ulong spider, int victim, float grip, byte phase)
+        {
+            G g;
+            if (!Grips.TryGetValue(spider, out g)) { g = new G(); Grips[spider] = g; }
+            PlayerControllerB me = GameNetworkManager.Instance != null ? GameNetworkManager.Instance.localPlayerController : null;
+            bool iAmVictim = me != null && (int)me.playerClientId == victim;
+            if (phase == Start || phase == StartStalk)
+            {
+                if (g.Active && g.Mine && me != null) Release(me, g);
+                g.Victim = victim; g.Last = Time.time; g.Active = true; g.Done = false;
+                g.Grip = grip; g.Mine = iAmVictim; g.Order = null; g.Stalk = phase == StartStalk;
+                Plugin.Log.LogInfo((g.Stalk ? "Stalker grab" : "Trapdoor grip") + ": the spider has hold of player " + victim + (iAmVictim ? " (you: mash " + Plugin.StruggleKey.Value + ")." : "."));
+                return;
+            }
+            if (!g.Active || g.Victim != victim)
+            {
+                Plugin.Dbg("Spider grip: ignored a late " + (phase == Hold ? "hold" : phase == Lost ? "dragged-under" : phase == Escaped ? "broke-free" : "let-go") + " message for player " + victim + " (that grip is already over).");
+                return;
+            }
+            if (phase == Hold)
+            {
+                g.Last = Time.time;
+                if (!g.Mine) g.Grip = grip; // the victim's own game decides the grip
+                return;
+            }
+            // The grab is over: everyone stops showing it.
+            bool was = g.Active;
+            g.Active = false; g.Order = null; g.Done = false;
+            if (g.Mine && me != null) Release(me, g);
+            g.Mine = false;
+            SandSpiderAI s = SpiderById(spider);
+            if (was) Plugin.Log.LogInfo((g.Stalk ? "Stalker grab" : "Trapdoor grip") + " on player " + victim + " ended: " + (phase == Lost ? (g.Stalk ? "the spider wraps them" : "dragged under") : phase == Escaped ? "they broke free" : "the spider let go"));
+            if (s != null && s.IsOwner) { Trapdoor.GripEnded(s, victim, phase); Ceiling.GripEnded(s, victim, phase); }
+            if (phase == Lost && s != null)
+            {
+                PlayerControllerB[] ps = StartOfRound.Instance.allPlayerScripts;
+                if (victim >= 0 && victim < ps.Length && ps[victim] != null && !ps[victim].isPlayerDead) Cocoon.Begin(ps[victim], s);
+            }
+        }
+
+        private static void Release(PlayerControllerB me, G g)
+        {
+            if (g.FrozeMove) { me.disableMoveInput = false; g.FrozeMove = false; }
+        }
+
+        // ---- the victim's own game: every frame (after the normal struggle code) ----
+        internal static void TickLocal()
+        {
+            if (Grips.Count == 0) return;
+            PlayerControllerB me = GameNetworkManager.Instance != null ? GameNetworkManager.Instance.localPlayerController : null;
+            if (me == null) return;
+            foreach (KeyValuePair<ulong, G> kv in Grips)
+            {
+                G g = kv.Value;
+                if (!g.Active || !g.Mine || g.Done) continue;
+                SandSpiderAI s = SpiderById(kv.Key);
+                if (s == null || s.isEnemyDead || me.isPlayerDead || Time.time - g.Last > 20f)
+                {
+                    g.Done = true; Release(me, g);
+                    Send(kv.Key, g.Victim, 0f, Abort);
+                    continue;
+                }
+                // The venom ran out during a stalker's grab and they collapsed: they are wrapped, so the grab is over (lost).
+                if (Cocoon.IsCocooned(me))
+                {
+                    g.Done = true; Release(me, g);
+                    Send(kv.Key, g.Victim, 1f, Lost);
+                    continue;
+                }
+                float dt = Time.deltaTime;
+                g.Grip += Plugin.TrapdoorGripRate.Value * dt;
+                var kb = UnityEngine.InputSystem.Keyboard.current;
+                bool busy = me.isTypingChat || me.inTerminalMenu || (me.quickMenuManager != null && me.quickMenuManager.isMenuOpen);
+                // A stalker bites as it grabs: with its venom in you each press counts for less.
+                float step = Plugin.TrapdoorMashStep.Value;
+                if (g.Stalk && Cocoon.IsVenomed(me)) step *= Mathf.Clamp(Plugin.StalkGrabVenomMashPercent.Value, 10f, 100f) / 100f;
+                if (!busy && kb != null && kb[Plugin.StruggleKey.Value].wasPressedThisFrame) g.Grip -= step;
+                g.Grip = Mathf.Clamp01(g.Grip);
+                // Held fast and pulled towards the hole (harder the tighter the grip).
+                if (!me.disableMoveInput) { me.disableMoveInput = true; g.FrozeMove = true; }
+                Vector3 to = s.transform.position - me.transform.position; to.y = 0f;
+                if (to.magnitude > 0.8f && me.thisController != null)
+                    me.thisController.Move(to.normalized * (0.25f + g.Grip * 1.1f) * dt);
+                Cocoon.StruggleActive = true;
+                Cocoon.StruggleBar = 1f - g.Grip;
+                byte phase = g.Grip >= 1f ? Lost : g.Grip <= 0f ? Escaped : Hold;
+                if (phase != Hold || Time.time >= g.NextSend)
+                {
+                    g.NextSend = Time.time + 0.1f;
+                    Send(kv.Key, g.Victim, g.Grip, phase);
+                }
+                if (phase != Hold) { g.Done = true; Release(me, g); } // stays Active until the message comes back, so every game ends it the same way
+            }
+        }
+
+        // ---- every game: legs round the victim (after the game has placed them for this frame) ----
+        private static readonly List<int> order = new List<int>();
+        internal static void Legs(SandSpiderAI s)
+        {
+            try
+            {
+                if (s == null || s.NetworkObject == null || s.legTargets == null || s.legTargets.Length == 0) return;
+                G g;
+                if (!Grips.TryGetValue(s.NetworkObjectId, out g) || !g.Active)
+                {
+                    float depth = Trapdoor.DepthOf(s);
+                    // while it wraps its catch (half in the hole after winning the
+                    // grip) the game's own wrapping leg motion must show; folding the legs into the hole hid it.
+                    if (SpoolingF != null && SpoolingF.GetValue(s) is bool sp && sp) return;
+                    if (depth > 0.05f)
+                    {
+                        Vector3 c = s.transform.position + Vector3.down * 0.3f;
+                        float wf = Mathf.Clamp01(depth / 0.8f);
+                        foreach (Transform leg in s.legTargets)
+                        {
+                            if (leg == null) continue;
+                            Vector3 off = leg.position - c; off.y = 0f;
+                            Vector3 folded = c + off * 0.25f + Vector3.down * depth * 0.6f;
+                            leg.position = Vector3.Lerp(leg.position, folded, wf);
+                        }
+                    }
+                    return;
+                }
+                PlayerControllerB[] ps = StartOfRound.Instance.allPlayerScripts;
+                if (g.Victim < 0 || g.Victim >= ps.Length || ps[g.Victim] == null) return;
+                Transform v = ps[g.Victim].transform;
+                if (s.meshContainer != null)
+                {
+                    Vector3 look = v.position - s.transform.position; look.y = 0f;
+                    if (look.sqrMagnitude > 0.01f)
+                    {
+                        Quaternion q = Quaternion.LookRotation(look);
+                        if (s.IsOwner) { if (TurnTarget != null) TurnTarget.SetValue(s, q); }
+                        else s.meshContainerServerRotation = q.eulerAngles;
+                    }
+                }
+                Transform[] legs = s.legTargets;
+                int n = legs.Length;
+                if (g.Order == null || g.Order.Length != n)
+                {
+                    order.Clear();
+                    for (int i = 0; i < n; i++) order.Add(i);
+                    order.Sort((a, b) => (legs[a].position - v.position).sqrMagnitude.CompareTo((legs[b].position - v.position).sqrMagnitude));
+                    g.Order = order.ToArray(); // fixed for this grab, so legs never swap hold points
+                }
+                Vector3 toSpider = s.transform.position - v.position; toSpider.y = 0f;
+                if (toSpider.sqrMagnitude < 0.01f) toSpider = Vector3.forward;
+                toSpider.Normalize();
+                // Hold points round the victim: front legs high on the chest, the rest lower, alternating sides.
+                for (int r = 0; r < n; r++)
+                {
+                    float w = Mathf.Clamp01(g.Grip * n * 1.15f - r);
+                    if (w <= 0f) break;
+                    int side = (r % 2 == 0) ? 1 : -1;
+                    float ang = side * (35f + 22f * (r / 2));
+                    Vector3 dir = Quaternion.Euler(0f, ang, 0f) * toSpider;
+                    float h = 1.35f - 0.22f * (r / 2);
+                    Vector3 p = v.position + Vector3.up * h + dir * 0.3f;
+                    Transform leg = legs[g.Order[r]];
+                    leg.position = Vector3.Lerp(leg.position, p, w);
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
+    [HarmonyPatch(typeof(SandSpiderAI), "LateUpdate")]
+    internal static class TrapdoorGripLegsPatch
+    {
+        [HarmonyPriority(Priority.Last)]
+        private static void Postfix(SandSpiderAI __instance) { TrapdoorGrip.Legs(__instance); }
+    }
+
+    // No ordinary bite while a trapdoor spider is holding someone at its lid (the tug-of-war decides).
+    [HarmonyPatch(typeof(SandSpiderAI), nameof(SandSpiderAI.OnCollideWithPlayer))]
+    internal static class TrapdoorGripNoBitePatch
+    {
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix(SandSpiderAI __instance) { return !TrapdoorGrip.Gripping(__instance); }
     }
 
     // Outdoor spiders: the trees. Which spiders wait in trees is decided the same way on every player's game (by the
@@ -6257,13 +8011,63 @@ namespace SpiderCocoon
         private static float builtAt = -999f;
 
         // Outdoor spiders that roam and stalk directly (no tree, no burying). Decided once per spider, the same on every game.
+        // a proper scramble of the network id (splitmix64). The old multiply-and-shift moved by ~1 per id, so spiders
+        // spawned close together (one round) nearly always got the same role (ids 123-130: all stalkers).
+        private static ulong Mix(ulong x)
+        {
+            unchecked
+            {
+                x += 0x9E3779B97F4A7C15UL;
+                x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9UL;
+                x = (x ^ (x >> 27)) * 0x94D049BB133111EBUL;
+                return x ^ (x >> 31);
+            }
+        }
+
         internal static bool Roams(SandSpiderAI s)
         {
             if (s == null || !Plugin.TreeStalk.Value) return false;
             Unity.Netcode.NetworkObject no = s.NetworkObject;
             ulong id = no != null ? no.NetworkObjectId : (ulong)(uint)s.GetInstanceID();
-            float pct = Cocoon.SpiderOutdoors(s) ? Plugin.StalkDirectChance.Value : Plugin.IndoorStalkChance.Value;
-            return ((id * 2246822519UL) >> 7) % 100UL < (ulong)Mathf.RoundToInt(pct);
+            bool outd = Cocoon.SpiderOutdoors(s);
+            float pct = outd ? Plugin.StalkDirectChance.Value : Plugin.IndoorStalkChance.Value;
+            if (Mix(id ^ 0x51A1CUL) % 100UL < (ulong)Mathf.RoundToInt(pct)) return true;
+            // in rain, storms and floods (TrapdoorNoSpawnWeather) the would-be trapdoor spiders stalk instead.
+            return outd && Plugin.TrapdoorEnabled.Value && WeatherStopsTrapdoors() && !TreeRoll(s, id);
+        }
+
+        private static string weatherLogged = "";
+        private static int weatherFrame = -1; private static bool weatherStop;
+        internal static bool WeatherStopsTrapdoors()
+        {
+            if (Time.frameCount == weatherFrame) return weatherStop; // once per frame, not per spider per call
+            weatherFrame = Time.frameCount; weatherStop = WeatherStopsNow();
+            return weatherStop;
+        }
+        private static bool WeatherStopsNow()
+        {
+            try
+            {
+                string list = Plugin.TrapdoorNoSpawnWeather.Value;
+                if (string.IsNullOrEmpty(list)) return false;
+                LevelWeatherType w = TimeOfDay.Instance != null ? TimeOfDay.Instance.currentLevelWeather
+                    : (StartOfRound.Instance != null && StartOfRound.Instance.currentLevel != null ? StartOfRound.Instance.currentLevel.currentWeather : LevelWeatherType.None);
+                string name = w.ToString();
+                bool stop = false;
+                foreach (string part in list.Split(','))
+                    if (string.Equals(part.Trim(), name, StringComparison.OrdinalIgnoreCase)) { stop = true; break; }
+                string key = name + stop + (StartOfRound.Instance != null ? StartOfRound.Instance.randomMapSeed : 0);
+                if (stop && key != weatherLogged) { weatherLogged = key; Plugin.Log.LogInfo("Trapdoor spiders: none today (weather " + name + "); they stalk instead."); }
+                return stop;
+            }
+            catch (Exception) { return false; }
+        }
+
+        // The tree part of Chosen (without the roaming check), so Roams can use it without going round in a circle.
+        private static bool TreeRoll(SandSpiderAI s, ulong id)
+        {
+            if (!Plugin.TreeEnabled.Value || Trees().Length == 0) return false;
+            return Mix(id ^ 0x7EE5UL) % 100UL < (ulong)Mathf.RoundToInt(Plugin.TreeChance.Value);
         }
 
         internal static bool Chosen(SandSpiderAI s)
@@ -6271,17 +8075,25 @@ namespace SpiderCocoon
             if (s == null || !Plugin.TreeEnabled.Value || Roams(s)) return false;
             Unity.Netcode.NetworkObject no = s.NetworkObject;
             ulong id = no != null ? no.NetworkObjectId : (ulong)(uint)s.GetInstanceID();
-            return (id * 2654435761UL) % 100UL < (ulong)Mathf.RoundToInt(Plugin.TreeChance.Value);
+            // a moon with no trees (Experimentation): a "tree" spider would only wander like a vanilla spider, so it
+            // becomes a trapdoor spider instead. Same answer on every game (same moon, same trees).
+            if (Trees().Length == 0) return false;
+            return Mix(id ^ 0x7EE5UL) % 100UL < (ulong)Mathf.RoundToInt(Plugin.TreeChance.Value);
         }
 
+        private static int treesKey = int.MinValue;
         internal static GameObject[] Trees()
         {
             try
             {
-                if (trees == null || trees.Length == 0 || trees[0] == null || Time.time - builtAt > 120f)
+                // kept per moon visit (an empty list used to be rescanned and logged every call: 187 lines in 20 s).
+                int key = StartOfRound.Instance != null ? StartOfRound.Instance.currentLevelID * 7919 ^ StartOfRound.Instance.randomMapSeed : 0;
+                bool stale = trees == null || key != treesKey || (trees.Length > 0 && trees[0] == null)
+                    || (trees.Length == 0 && Time.time - builtAt > 30f);
+                if (stale)
                 {
                     trees = GameObject.FindGameObjectsWithTag("Tree");
-                    builtAt = Time.time;
+                    builtAt = Time.time; treesKey = key;
                     Plugin.Dbg("Tree perch: found " + trees.Length + " trees on this level.");
                 }
             }
@@ -6317,6 +8129,27 @@ namespace SpiderCocoon
             catch (Exception e) { Plugin.Log.LogWarning("Tree spider: could not draw the web strands: " + e.Message); }
         }
 
+        // the rope's physics lets the cocoon settle well above where it was placed (seen: 3.9 m and 8 m up instead of
+        // 1.6 m, out of reach for a rescue). Once it has settled, lower the rope's top by the difference (up to 3 times).
+        private static IEnumerator SettleTreeHang(SetLineRendererPoints line, float groundY, float h)
+        {
+            float want = groundY + h;
+            for (int pass = 0; pass < 3; pass++)
+            {
+                yield return new WaitForSeconds(pass == 0 ? 1.2f : 0.8f);
+                if (line == null || line.target == null) yield break;
+                float off = line.target.position.y - want;
+                if (Mathf.Abs(off) < 0.2f) break;
+                Vector3 top = line.transform.position;
+                float newTop = Mathf.Max(top.y - off, want + 2f); // the rope's top always stays well above the victim
+                line.transform.position = new Vector3(top.x, newTop, top.z);
+                Plugin.Dbg("Tree hang: cocoon settled " + off.ToString("0.0") + " m off its height; rope top moved to " + (newTop - groundY).ToString("0.0") + " m up.");
+            }
+            yield return new WaitForSeconds(0.8f);
+            if (line != null && line.target != null)
+                Plugin.Log.LogInfo("Tree hang: cocoon now " + (line.target.position.y - groundY).ToString("0.0") + " m above the ground (wanted " + h.ToString("0.0") + ").");
+        }
+
         // Hangs the spider's catch from the nearest tree (within 30 m): the rope's top is up in the tree beside the trunk and the
         // victim hangs below it, at the same height above the ground as a victim hung indoors (HangHeightAboveGround).
         // Returns false (and does nothing) when there is no tree to use; the caller then drops the cocoon on the ground.
@@ -6341,8 +8174,18 @@ namespace SpiderCocoon
                 RaycastHit hit;
                 if (!Physics.Raycast(new Ray(from, dir), out hit, bd + 8f, 33554432, QueryTriggerInteraction.Ignore)) return false;
                 Vector3 xz = hit.point - dir * Plugin.TreeHangOut.Value;
+                // the ground under the hang point. The spider carries the body up the trunk, so a ray from above the body
+                // started among the branches and hit one: the victim was hung ~9 m up, out of everyone's reach. Measure from
+                // the spider's AI instead (it always stands on the ground), with the walkable-ground map as a fallback.
                 RaycastHit floor;
-                if (!Physics.Raycast(new Vector3(xz.x, bodyPos.y + 3f, xz.z), Vector3.down, out floor, 15f, StartOfRound.Instance.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore)) return false;
+                float aiY = s.transform.position.y;
+                bool gotFloor = Physics.Raycast(new Vector3(xz.x, aiY + 2f, xz.z), Vector3.down, out floor, 8f, StartOfRound.Instance.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore);
+                if (!gotFloor)
+                {
+                    UnityEngine.AI.NavMeshHit nh;
+                    if (!UnityEngine.AI.NavMesh.SamplePosition(new Vector3(xz.x, aiY, xz.z), out nh, 4f, UnityEngine.AI.NavMesh.AllAreas)) return false;
+                    floor = new RaycastHit { point = nh.position };
+                }
                 float h = Mathf.Max(Plugin.HangHeightAboveGround.Value, 0.5f);
                 Vector3 anchor = new Vector3(xz.x, floor.point.y + Mathf.Max(Plugin.TreeHeight.Value, h + 2.5f), xz.z);
                 Vector3 target = new Vector3(xz.x, floor.point.y + h, xz.z);
@@ -6350,6 +8193,16 @@ namespace SpiderCocoon
                 Cocoon.OnBodyHung(held, s);
                 SetLineRendererPoints line = UnityEngine.Object.Instantiate(s.hangBodyPhysicsPrefab, anchor, Quaternion.identity,
                     RoundManager.Instance.mapPropsContainer.transform).GetComponent<SetLineRendererPoints>();
+                // the game's rope has a fixed length (made for ceilings): with its top 16 m up the victim stopped ~8.6 m
+                // below it, out of reach. Read the rope's own length as it comes out of the prefab and keep the top within it.
+                float ropeLen = (line.anchor != null && line.target != null) ? Vector3.Distance(line.anchor.position, line.target.position) : 0f;
+                if (ropeLen < 2f) ropeLen = 8f;
+                float topUp = Mathf.Min(anchor.y - floor.point.y, h + ropeLen - 0.4f);
+                if (topUp < anchor.y - floor.point.y - 0.01f)
+                {
+                    anchor = new Vector3(anchor.x, floor.point.y + topUp, anchor.z);
+                    line.transform.position = anchor;
+                }
                 line.target.position = target;
                 held.attachedTo = line.target;
                 decided = false;
@@ -6358,8 +8211,9 @@ namespace SpiderCocoon
                 held.bodyAudio.volume = 0.8f;
                 held.bodyAudio.PlayOneShot(s.hangPlayerSFX);
                 held = null;
+                CocoonRunner.Run(SettleTreeHang(line, floor.point.y, h)); // td28
                 Plugin.Log.LogInfo("Tree spider: hangs its catch from '" + best.name + "' (" + bd.ToString("0") + " m away), rope top "
-                    + (anchor.y - floor.point.y).ToString("0.0") + " m up, victim " + h.ToString("0.0") + " m above the ground.");
+                    + (anchor.y - floor.point.y).ToString("0.0") + " m up (rope " + ropeLen.ToString("0.0") + " m), victim " + h.ToString("0.0") + " m above the ground at y " + floor.point.y.ToString("0.0") + ".");
                 return true;
             }
             catch (Exception e)
@@ -6375,7 +8229,7 @@ namespace SpiderCocoon
     // bite, wrap and hang take over (and this mod's venom, cocoon and rescue with them).
     internal static class Ceiling
     {
-        internal enum Mode { Walk, Rising, Waiting, Dropping, Done, Stalk, Web }
+        internal enum Mode { Walk, Rising, Waiting, Dropping, Done, Stalk, Web, Grab }
 
         internal class CS
         {
@@ -6392,11 +8246,14 @@ namespace SpiderCocoon
             public float Stand = 1f;          // how far the body's pivot sits out from the trunk surface
             public float Turn;                // 0 = head up the trunk, 1 = turned right round to face down
             public float CeilY = -99999f;
+            public float ArriveAt = -1f;      // when the (invisible) AI reached the climb spot, to let the body catch up
             public float Opacity = 1f;
             public bool FadeActive;
             public PlayerControllerB Target;
             public bool Stalk;                // the drop in progress ends in a stalk, not a chase
             public PlayerControllerB StalkTarget;
+            public float StalkMin = 999f, StalkMinFor = -1f; // closest the spider got to its stalk target, this stalk
+            public PlayerControllerB GrabTarget; public float GrabCoolUntil = -1f; public int GrabCoolFor = -1; // stalker grab (after the web)
             public float Meter, CloseSince = -1f; public bool Frozen, StalkLogged, Roam, Cloaked; public float CloakOp = 1f; public float WebT, WebBlocked; public Dictionary<int, Vector2> PrevAng = new Dictionary<int, Vector2>();
             public List<Renderer> Hidden = new List<Renderer>();
             public SandSpiderAI Spider;
@@ -6415,6 +8272,20 @@ namespace SpiderCocoon
             = new System.Runtime.CompilerServices.ConditionalWeakTable<SandSpiderAI, DiagState>();
 
         private static float YawOf(Transform tr) { return tr == null ? 0f : tr.eulerAngles.y; }
+
+        // A targetable player within this many metres sideways, on the spider's floor (inside: within 6 m up/down).
+        private static bool SomeoneNear(SandSpiderAI s, float metres)
+        {
+            Vector3 sp = s.transform.position;
+            foreach (PlayerControllerB p in StartOfRound.Instance.allPlayerScripts)
+            {
+                if (p == null || !s.PlayerIsTargetable(p)) continue;
+                Vector3 pp = p.transform.position;
+                if (Mathf.Abs(pp.y - sp.y) > 6f) continue;
+                if (new Vector2(pp.x - sp.x, pp.z - sp.z).sqrMagnitude < metres * metres) return true;
+            }
+            return false;
+        }
 
         internal static void Diag(SandSpiderAI s)
         {
@@ -6533,9 +8404,35 @@ namespace SpiderCocoon
 
         internal static bool Interval(SandSpiderAI s)
         {
+            if (Applies(s) && s.IsOwner && s.currentBehaviourStateIndex == 2 && s.targetPlayer != null)
+            {
+                // just let go of this player after a grab: leave them alone for the cooldown (no chase straight back in).
+                CS cc = Get(s, false);
+                if (cc != null && Time.time < cc.GrabCoolUntil && (int)s.targetPlayer.playerClientId == cc.GrabCoolFor)
+                {
+                    s.targetPlayer = null;
+                    s.SwitchToBehaviourState(0);
+                }
+            }
             if (!Applies(s) || !s.IsOwner || s.currentBehaviourStateIndex != 0) return true;
             if (HeldBody != null && HeldBody.GetValue(s) != null) return true;
             CS cs = Get(s, true);
+            // it bit someone while walking about (not from the ceiling): go after them instead of carrying on to
+            // its next ceiling spot. Before, it walked 25 m away and was too far to fetch the victim when they collapsed.
+            if (cs.M == Mode.Walk && !cs.Roam)
+            {
+                PlayerControllerB bitten = Cocoon.VenomVictimOf(s);
+                if (bitten != null)
+                {
+                    s.targetPlayer = bitten;
+                    if (WatchF != null) WatchF.SetValue(s, false);
+                    if (ChaseTimerF != null) ChaseTimerF.SetValue(s, 12.5f);
+                    s.SwitchToBehaviourState(2);
+                    cs.M = Mode.Done; cs.HasNode = false; cs.Since = Time.time;
+                    Plugin.Log.LogInfo("Ceiling spider: bit player " + bitten.playerClientId + " on the way to its spot; it follows them instead.");
+                    return true;
+                }
+            }
             if (cs.M == Mode.Done)
             {
                 cs.M = Mode.Walk; cs.HasNode = false; Roll(cs);
@@ -6571,7 +8468,7 @@ namespace SpiderCocoon
                 }
                 if (cs.M == Mode.Walk) return true;
             }
-            if (cs.M == Mode.Web)
+            if (cs.M == Mode.Web || cs.M == Mode.Grab)
             {
                 s.destination = s.transform.position;
                 s.movingTowardsTargetPlayer = false;
@@ -6612,18 +8509,30 @@ namespace SpiderCocoon
                         Vector3 mp = s.meshContainer.position, tp = s.transform.position;
                         modelGap = Vector2.Distance(new Vector2(mp.x, mp.z), new Vector2(tp.x, tp.z));
                     }
-                    if (agentThere || timedOut)
+                    // the visible body walks behind the AI (often 5 m, up to 20+ m). Before, it was teleported onto
+                    // the AI the moment the AI arrived; anyone watching saw it jump. Now the AI waits at the spot for up
+                    // to 8 s while the body walks the rest of the way, and only a body that is truly stuck gets moved.
+                    bool bodyLate = false;
+                    if (agentThere && !timedOut && modelGap > 0.6f)
+                    {
+                        if (cs.ArriveAt < 0f) cs.ArriveAt = Time.time;
+                        bodyLate = Time.time - cs.ArriveAt < 8f;
+                    }
+                    if ((agentThere || timedOut) && !bodyLate)
                     {
                         // The visible model trails behind the real spider and can get stuck (on a door, say).
                         // Bring it onto the real spider before the climb starts.
-                        if (modelGap > 0.3f && s.meshContainer != null)
+                        float waited = cs.ArriveAt >= 0f ? Time.time - cs.ArriveAt : 0f;
+                        cs.ArriveAt = -1f;
+                        if (modelGap > 0.6f && s.meshContainer != null)
                         {
                             Vector3 tp = s.transform.position;
                             s.meshContainerPosition = tp;
                             s.meshContainer.position = tp;
                             s.meshContainerTarget = tp;
-                            Plugin.Log.LogInfo("Ceiling spider: its body was " + modelGap.ToString("0.0") + " m behind; moved it onto the spider before the climb.");
+                            Plugin.Log.LogInfo("Ceiling spider: its body was " + modelGap.ToString("0.0") + " m behind" + (waited > 0f ? " after waiting " + waited.ToString("0.0") + " s for it" : "") + "; moved it onto the spider before the climb.");
                         }
+                        else if (waited > 0f) Plugin.Log.LogInfo("Ceiling spider: its body caught up by itself (" + waited.ToString("0.0") + " s).");
                         float goal = cs.Tree ? TreeGoal(s, cs) : GoalAbove(s.transform.position);
                         if (goal >= 0.5f)
                         {
@@ -6817,6 +8726,7 @@ namespace SpiderCocoon
                 if (s.SetDestinationToPosition(n.transform.position, true))
                 {
                     cs.Node = n.transform.position; cs.HasNode = true; cs.M = Mode.Walk; cs.Since = Time.time;
+                    cs.ArriveAt = -1f;
                     Plugin.Log.LogInfo("Ceiling spider: heading to a spot " + d.ToString("0") + " m away to climb the ceiling.");
                     return true;
                 }
@@ -6851,6 +8761,20 @@ namespace SpiderCocoon
                 Plugin.Log.LogInfo("Stalk: ended because the spider's behaviour state is now " + s.currentBehaviourStateIndex + ".");
                 if (cs.M == Mode.Web) SpiderWeb.Stop(s);
                 cs.M = Mode.Done;
+            }
+            if (cs.M == Mode.Grab && cs.GrabTarget != null && Cocoon.IsCocooned(cs.GrabTarget))
+            {
+                // the venom ran out during the grab and they were wrapped: the spider has them (the grab's own end message follows)
+                cs.M = Mode.Done; cs.GrabTarget = null; cs.Since = Time.time;
+            }
+            if (cs.M == Mode.Grab && s.currentBehaviourStateIndex != 0)
+            {
+                int gid = cs.GrabTarget != null ? (int)cs.GrabTarget.playerClientId : -1;
+                Plugin.Log.LogInfo("Stalker grab: the spider lets go of player " + gid + " (it was hit).");
+                if (gid >= 0) TrapdoorGrip.Send(s.NetworkObjectId, gid, 0f, TrapdoorGrip.Abort);
+                cs.GrabTarget = null; cs.M = Mode.Done;
+                float cool = Mathf.Max(0f, Plugin.StalkGrabCooldownSeconds.Value);
+                cs.GrabCoolUntil = Time.time + cool; cs.GrabCoolFor = gid;
             }
             switch (cs.M)
             {
@@ -6909,6 +8833,10 @@ namespace SpiderCocoon
                         SetHidden(s, cs, false);
                         Plugin.Log.LogInfo("Ceiling spider: drops on player " + hit.playerClientId + " (" + best.ToString("0.0") + " m beneath it).");
                     }
+                    else if (Time.time - cs.Since > Plugin.CeilingRelocateSeconds.Value && !cs.Tree && SomeoneNear(s, 10f))
+                    {
+                        cs.Since = Time.time - Plugin.CeilingRelocateSeconds.Value + 15f; // someone is about: keep waiting a while longer
+                    }
                     else if (Time.time - cs.Since > Plugin.CeilingRelocateSeconds.Value)
                     {
                         cs.Target = null; cs.M = Mode.Dropping; cs.FallSpeed = 0f; cs.Since = Time.time;
@@ -6919,7 +8847,9 @@ namespace SpiderCocoon
                 }
                 case Mode.Dropping:
                     if (cs.DropFrom <= 0f) { cs.DropFrom = Mathf.Max(cs.Height, 0.01f); cs.DropRoll = cs.Roll; }
-                    cs.FallSpeed += 22f * dt;
+                    // moving house (no target): it climbs down at its climbing speed instead of falling like a stone.
+                    if (cs.Target == null && !cs.Stalk) cs.FallSpeed = Plugin.CeilingRiseSpeed.Value;
+                    else cs.FallSpeed += 22f * dt;
                     cs.Height = Mathf.Max(0f, cs.Height - cs.FallSpeed * dt);
                     if (cs.Height <= 0.01f)
                     {
@@ -6948,6 +8878,9 @@ namespace SpiderCocoon
                     break;
                 case Mode.Web:
                     WebFrame(s, cs, dt);
+                    break;
+                case Mode.Grab:
+                    GrabFrame(s, cs);
                     break;
                 default:
                     if (cs.Height > 0f) cs.Height = Mathf.Max(0f, cs.Height - 5f * dt);
@@ -7146,6 +9079,72 @@ namespace SpiderCocoon
             Plugin.Log.LogInfo("Spider web: shoots a web line at player " + tg.playerClientId + " from " + Vector3.Distance(s.transform.position, tg.transform.position).ToString("0.0") + " m.");
         }
 
+        // The web has reeled them in: the spider takes hold of them and bites. The victim's game runs the tug-of-war (TrapdoorGrip,
+        // with the venom making each struggle press count for less) and tells every game how it ends: Lost = wrapped on the spot,
+        // Escaped = it lets go and leaves them alone for StalkGrabCooldownSeconds.
+        private static void StartGrab(SandSpiderAI s, CS cs, PlayerControllerB tg)
+        {
+            SpiderWeb.Stop(s);
+            cs.M = Mode.Grab; cs.Since = Time.time; cs.GrabTarget = tg;
+            s.destination = s.transform.position;
+            int id = (int)tg.playerClientId;
+            Plugin.Log.LogInfo("Spider web: reeled player " + id + " in; the spider grabs them and bites.");
+            TrapdoorGrip.Send(s.NetworkObjectId, id, Plugin.TrapdoorGripStart.Value, TrapdoorGrip.StartStalk);
+            if (!Cocoon.IsVenomed(tg))
+            {
+                try { s.HitPlayerServerRpc(id); } // the same message as a real bite: attack animation, sound and venom on every game
+                catch (Exception e) { Plugin.Log.LogWarning("Stalker grab: could not send the bite (" + e.Message + ")."); }
+            }
+        }
+
+        // Owner, every frame while it holds them: let go if they are gone, out of reach or it has held on too long.
+        private static void GrabFrame(SandSpiderAI s, CS cs)
+        {
+            PlayerControllerB v = cs.GrabTarget;
+            bool gone = v == null || v.isPlayerDead || !v.isPlayerControlled
+                || new Vector2(v.transform.position.x - s.transform.position.x, v.transform.position.z - s.transform.position.z).magnitude > 4f;
+            if (v != null && !gone && Cocoon.IsCocooned(v)) return; // wrapped: the grab ends by its own message
+            if (gone || Time.time - cs.Since > 30f)
+            {
+                int id = v != null ? (int)v.playerClientId : -1;
+                Plugin.Log.LogInfo("Stalker grab: the spider lets go of player " + id + " (" + (gone ? "they are gone" : "held too long") + ").");
+                if (id >= 0) TrapdoorGrip.Send(s.NetworkObjectId, id, 0f, TrapdoorGrip.Abort);
+                LetGo(s, cs, id);
+            }
+        }
+
+        private static void LetGo(SandSpiderAI s, CS cs, int victim)
+        {
+            cs.GrabTarget = null; cs.HasNode = false;
+            cs.M = Mode.Walk;
+            float cool = Mathf.Max(0f, Plugin.StalkGrabCooldownSeconds.Value);
+            cs.GrabCoolUntil = Time.time + cool; cs.GrabCoolFor = victim;
+            cs.Since = Time.time - 20f + cool; // a roaming stalker starts a new stalk 20 s after cs.Since
+            if (s.IsOwner && s.currentBehaviourStateIndex != 0) { s.targetPlayer = null; s.SwitchToBehaviourState(0); }
+        }
+
+        // Every game, from the grip's end message (only the owner acts).
+        internal static void GripEnded(SandSpiderAI s, int victim, byte phase)
+        {
+            CS cs = Get(s, false);
+            if (cs == null || cs.M != Mode.Grab) return;
+            if (phase == TrapdoorGrip.Lost) { cs.M = Mode.Done; cs.GrabTarget = null; cs.Since = Time.time; return; } // wrapped: it carries and hangs them as usual
+            if (phase == TrapdoorGrip.Escaped) Plugin.Log.LogInfo("Stalker grab: player " + victim + " broke free; the spider leaves them alone for " + Plugin.StalkGrabCooldownSeconds.Value.ToString("0") + " s.");
+            LetGo(s, cs, victim);
+        }
+
+        // The line broke but the spider does not give up: it hunts the player down (the game's own chase, which ends in a bite).
+        private static void ChaseAfterWeb(SandSpiderAI s, CS cs, PlayerControllerB tg)
+        {
+            cs.HasNode = false; cs.Since = Time.time;
+            if (tg == null || tg.isPlayerDead || !s.PlayerIsTargetable(tg)) { cs.M = Mode.Walk; return; }
+            s.targetPlayer = tg;
+            if (WatchF != null) WatchF.SetValue(s, false);
+            if (ChaseTimerF != null) ChaseTimerF.SetValue(s, 12.5f);
+            s.SwitchToBehaviourState(2);
+            cs.M = Mode.Done;
+        }
+
         // The spider stands and reels. Ends in the normal chase (bite) when you arrive, or lets go if you break the line of sight.
         private static void WebFrame(SandSpiderAI s, CS cs, float dt)
         {
@@ -7161,6 +9160,11 @@ namespace SpiderCocoon
             if (LookAtF != null && s.meshContainer != null)
                 LookAtF.Invoke(s, new object[] { new Vector3(tp.x, s.meshContainer.position.y, tp.z) });
             float dist = Vector2.Distance(new Vector2(tp.x, tp.z), new Vector2(sp.x, sp.z));
+            if (dist < 2.4f && Plugin.StalkGrab.Value && !Cocoon.IsCocooned(tg))
+            {
+                StartGrab(s, cs, tg);
+                return;
+            }
             if (dist < 2.4f)
             {
                 SpiderWeb.Stop(s);
@@ -7193,15 +9197,15 @@ namespace SpiderCocoon
             if (dist > Plugin.WebBreakMeters.Value)
             {
                 SpiderWeb.Stop(s);
-                cs.M = Mode.Walk; cs.HasNode = false; cs.Since = Time.time - 10f;
-                Plugin.Log.LogInfo("Spider web: the line snapped; the player stretched it to " + dist.ToString("0.0") + " m.");
+                Plugin.Log.LogInfo("Spider web: the line snapped; the player stretched it to " + dist.ToString("0.0") + " m. The spider charges after them.");
+                ChaseAfterWeb(s, cs, tg);
                 return;
             }
             if (cs.WebBlocked > 0f || cs.WebT > 7f)
             {
                 SpiderWeb.Stop(s);
-                cs.M = Mode.Walk; cs.HasNode = false; cs.Since = Time.time - 10f;
-                Plugin.Log.LogInfo("Spider web: the line was broken (" + (cs.WebBlocked > 0f ? "blocked" : "too long") + "); the spider lets go.");
+                Plugin.Log.LogInfo("Spider web: the line was broken (" + (cs.WebBlocked > 0f ? "blocked" : "too long") + "). The spider charges after them.");
+                ChaseAfterWeb(s, cs, tg);
             }
         }
 
@@ -7243,8 +9247,14 @@ namespace SpiderCocoon
                     + " path " + (ag != null && ag.enabled && ag.isOnNavMesh ? ag.pathStatus.ToString() : "-") + " special " + s.inSpecialAnimation
                     + " spiderSpeed " + s.spiderSpeed.ToString("0.0"));
             }
-            if (Plugin.WebPull.Value && (!seen || Plugin.WebEvenIfWatched.Value) && dist <= Plugin.WebRange.Value && dist > 3.2f && WebShotClear(s, tg))
+            // web only when the target is getting away: at least WebEscapeMeters off, 2.5 m further than the
+            // closest the spider had got, and within WebMaxMeters. Up close it creeps and charges (td29's delay is gone).
+            if (cs.StalkMinFor != cs.Since) { cs.StalkMinFor = cs.Since; cs.StalkMin = dist; }
+            cs.StalkMin = Mathf.Min(cs.StalkMin, dist);
+            bool escaping = dist >= Plugin.WebEscapeMeters.Value && dist - cs.StalkMin >= 2.5f;
+            if (Plugin.WebPull.Value && escaping && (!seen || Plugin.WebEvenIfWatched.Value) && dist <= Plugin.WebRange.Value && WebShotClear(s, tg))
             {
+                Plugin.Log.LogInfo("Stalk: player " + tg.playerClientId + " is getting away (" + cs.StalkMin.ToString("0.0") + " -> " + dist.ToString("0.0") + " m); the spider shoots its web.");
                 BeginWeb(s, cs, tg);
                 return;
             }
@@ -7257,7 +9267,7 @@ namespace SpiderCocoon
                 if (ChaseTimerF != null) ChaseTimerF.SetValue(s, 12.5f);
                 s.SwitchToBehaviourState(2);
                 cs.M = Mode.Done; cs.Frozen = false; cs.Since = Time.time;
-                Plugin.Log.LogInfo("Tree spider: charges player " + tg.playerClientId + " from " + dist.ToString("0.0") + " m.");
+                Plugin.Log.LogInfo((cs.Tree ? "Tree" : "Stalking") + " spider: charges player " + tg.playerClientId + " from " + dist.ToString("0.0") + " m.");
                 return;
             }
             if (cs.Meter > 16f)
@@ -7488,7 +9498,7 @@ namespace SpiderCocoon
                 ulong id = s.NetworkObject.NetworkObjectId;
                 if (td.Depth > 0.001f) { Active.Add(id); }
                 else if (!Active.Remove(id)) continue; // one last zero when it has surfaced
-                ids.Add(id); depths.Add(td.Depth); hid.Add(td.Hidden.Count > 0); rolls.Add(0f); ops.Add(1f);
+                ids.Add(id); depths.Add(td.Depth); hid.Add(td.Hidden.Count > 0 || td.WantHide); rolls.Add(0f); ops.Add(1f);
                 if (Time.time >= nextLog) { nextLog = Time.time + 1f; Plugin.Log.LogInfo("Depth message sent: spider " + id + " depth " + td.Depth.ToString("F2") + ", hidden " + (td.Hidden.Count > 0)); }
             }
             foreach (Ceiling.CS cs in Ceiling.AllStates())
@@ -7633,6 +9643,10 @@ namespace SpiderCocoon
     {
         private static void Postfix(SandSpiderAI __instance)
         {
+            // Once every player is dead the game stops placing the spider's body each frame (LateUpdate returns early).
+            // Our raise/sink offsets are added to the body's current position, so they would pile up frame after frame
+            // and fling the body into the sky (or deep underground). Freeze it where it is instead, like the game does.
+            if (StartOfRound.Instance != null && StartOfRound.Instance.allPlayersDead) return;
             try { Trapdoor.Frame(__instance); Ceiling.Frame(__instance); SpiderWeb.Tick(__instance); Ceiling.Diag(__instance); }
             catch (Exception e) { Plugin.Log.LogError("Trapdoor frame failed: " + e); }
         }
@@ -8484,7 +10498,7 @@ namespace SpiderCocoon
                     PlayerControllerB p = sor.allPlayerScripts[i];
                     if (p == null) continue;
                     int id = (int)p.playerClientId;
-                    bool want = Plugin.MuffleVoices.Value && Cocoon.IsCocooned(p);
+                    bool want = Plugin.MuffleVoices.Value && Cocoon.IsCocooned(p) && !p.isPlayerDead;
                     bool has = On.Contains(id);
                     if (!want && !has) continue;
                     AudioSource src = p.currentVoiceChatAudioSource;
@@ -8548,7 +10562,7 @@ namespace SpiderCocoon
             {
                 PlayerControllerB me = GameNetworkManager.Instance != null ? GameNetworkManager.Instance.localPlayerController : null;
                 if (me == null || !Plugin.DebugLogging.Value || !Plugin.VerboseLogs.Value) { Active = false; return; }
-                if (Cocoon.IsCocooned(me)) lastCocoon = Time.time;
+                if (Cocoon.IsCocooned(me) && !me.isPlayerDead) lastCocoon = Time.time;
                 bool was = Active;
                 Active = Time.time - lastCocoon < 6f || (Plugin.LogAllSounds != null && Plugin.LogAllSounds.Value);
                 if (!Active) { if (Playing.Count > 0) Playing.Clear(); return; }
@@ -8919,6 +10933,20 @@ namespace SpiderCocoon
             Active.Remove(id);
             if (e.Line != null) UnityEngine.Object.Destroy(e.Line.gameObject);
             if (e.Anchor != null) UnityEngine.Object.Destroy(e.Anchor.gameObject);
+            StopSpool(e.Spider);
+        }
+
+        // The line is gone: stop the reeling animation now (the game fades its override layer out once overrideAnimation is
+        // used up, and the legs go back to walking), instead of letting the spider keep reeling an empty line for up to 4 s.
+        private static void StopSpool(SandSpiderAI s)
+        {
+            try
+            {
+                if (s == null || s.isEnemyDead) return;
+                s.overrideAnimation = 0f;
+                if (s.creatureAnimator != null) s.creatureAnimator.ResetTrigger("spool");
+            }
+            catch (Exception) { }
         }
 
         // Each frame, on every game, for the spider that owns the line.
@@ -8955,6 +10983,26 @@ namespace SpiderCocoon
                 }
                 if (Time.time >= e.NextFear) { e.NextFear = Time.time + 1f; try { e.Target.JumpToFearLevel(1f); } catch (Exception) { } }
             }
+        }
+    }
+
+    // End of a round (everyone is revived in orbit): cocoons left hanging dead and never cut open belong to the old
+    // moon. Forget them, or next round a cut on that player would "open" the stale one instead of freeing them.
+    [HarmonyPatch(typeof(StartOfRound), nameof(StartOfRound.ReviveDeadPlayers))]
+    internal static class DormantRoundEndPatch
+    {
+        private static void Postfix()
+        {
+            // forget trapdoor spiders that no longer exist (their lists only ever grew).
+            try { Trapdoor.PruneGone(); TrapdoorBurrow.PruneGone(); TrapdoorGrip.PruneGone(); }
+            catch (Exception e) { Plugin.Log.LogWarning("Round-end trapdoor clean-up failed: " + e.Message); }
+            try
+            {
+                if (Cocoon.Dormants.Count == 0) return;
+                Plugin.Log.LogInfo("Round over: forgetting " + Cocoon.Dormants.Count + " cocoon(s) still hanging dead and unopened.");
+                Cocoon.Dormants.Clear();
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Round-end cocoon clean-up failed: " + e.Message); }
         }
     }
 
@@ -9019,7 +11067,159 @@ namespace SpiderCocoon
         }
     }
 
-    // While the venom works, the spider that bit is slowed. Runs last each frame, after every other speed decision.
+    // A victim who was wrapped while a haunted mask was on them: the first cut-down finishes the mask's takeover.
+    // The victim dies (as the mask would have killed them) and a Masked enemy that looks like them bursts out of the cocoon.
+    internal static class MaskTrap
+    {
+        internal const string SpringName = "HungToDry.MaskSpring";
+        internal const string MimicName = "HungToDry.MaskMimic";
+
+        // Host only. Returns true if the cut-down was turned into the takeover (so the normal release must NOT run).
+        internal static bool TrySpring(int id)
+        {
+            try
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm == null || !nm.IsServer || !Plugin.MaskTrap.Value) return false;
+                CocoonState s;
+                if (!Cocoon.ActiveStates.TryGetValue(id, out s) && !Cocoon.Dormants.TryGetValue(id, out s)) return false;
+                if (!s.MaskTrap || s.MaskSprung || s.Player == null) return false;
+                s.MaskSprung = true; // only ever once, even if the spawn fails
+                EnemyType et = null;
+                foreach (EnemyType t in Resources.FindObjectsOfTypeAll<EnemyType>())
+                    if (t != null && t.enemyPrefab != null && t.enemyPrefab.GetComponentInChildren<MaskedPlayerEnemy>() != null) { et = t; break; }
+                if (et == null) { Plugin.Log.LogWarning("Mask trap: no Masked enemy type found; the victim is freed normally."); return false; }
+                Vector3 basePos = s.StandIn != null ? s.StandIn.transform.position : s.Player.transform.position;
+                // Stand the Masked on the floor UNDER the cocoon. The nearest nav mesh point can be on another
+                // floor above the ceiling (seen in a test: 5 m above the cocoon), where nobody can see or reach it.
+                Vector3 pos; string how;
+                RaycastHit floorHit; UnityEngine.AI.NavMeshHit nh;
+                if (s.Buried && UnityEngine.AI.NavMesh.SamplePosition(s.DigSpot, out nh, 4f, -1))
+                {
+                    // buried by a trapdoor spider: it climbs out of the burrow onto the ground there.
+                    pos = nh.position; how = "on the ground at the burrow";
+                }
+                else if (Physics.Raycast(basePos + Vector3.up * 0.3f, Vector3.down, out floorHit, 40f, StartOfRound.Instance.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore)
+                    && UnityEngine.AI.NavMesh.SamplePosition(floorHit.point, out nh, 3f, -1) && Mathf.Abs(nh.position.y - floorHit.point.y) < 1.5f)
+                {
+                    pos = nh.position; how = "floor under the cocoon";
+                }
+                else
+                {
+                    pos = RoundManager.Instance.GetNavMeshPosition(basePos, default(UnityEngine.AI.NavMeshHit), 10f);
+                    if (!RoundManager.Instance.GotNavMeshPositionResult) { Plugin.Log.LogWarning("Mask trap: no nav mesh near the cocoon; the victim is freed normally."); return false; }
+                    how = "nearest nav mesh (no floor found under the cocoon)";
+                    if (pos.y > basePos.y + 0.5f) Plugin.Log.LogWarning("Mask trap: the only walkable spot is " + (pos.y - basePos.y).ToString("0.0") + " m ABOVE the cocoon; the Masked may end up on another floor.");
+                }
+                Plugin.Dbg("Mask trap spawn: cocoon at " + basePos.ToString("F1") + ", Masked placed at " + pos.ToString("F1") + " (" + how + ").");
+                Unity.Netcode.NetworkObjectReference r = RoundManager.Instance.SpawnEnemyGameObject(pos, s.Player.transform.eulerAngles.y, -1, et);
+                Unity.Netcode.NetworkObject no;
+                if (!r.TryGet(out no)) { Plugin.Log.LogWarning("Mask trap: the Masked enemy did not spawn; the victim is freed normally."); return false; }
+                MaskedPlayerEnemy m = no.GetComponent<MaskedPlayerEnemy>();
+                if (m == null) return false;
+                bool outside = !s.Player.isInsideFactory;
+                m.SetSuit(s.Player.currentSuitID);
+                m.mimickingPlayer = s.Player; // set at once, or the game spawns a generic Masked with no player
+                m.SetEnemyOutside(outside);
+                m.SetMaskType(s.MaskTypeId);
+                Plugin.Log.LogInfo("Mask trap: player " + id + " is taken over by the mask; a Masked enemy bursts out of the cocoon at " + pos.ToString("F1") + " (mask type " + s.MaskTypeId + ").");
+                SendSpring(id);
+                Cocoon.MaskDeath(id); // this game too (the host gets no copy of its own message)
+                CocoonRunner.Run(Finish(m, s.Player, s.MaskTypeId, outside, no.NetworkObjectId));
+                return true;
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Mask trap failed: " + e.Message); return false; }
+        }
+
+        private static void SendSpring(int id)
+        {
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            using (Unity.Netcode.FastBufferWriter w = new Unity.Netcode.FastBufferWriter(2, Unity.Collections.Allocator.Temp))
+            {
+                w.WriteByteSafe((byte)id);
+                nm.CustomMessagingManager.SendNamedMessageToAll(SpringName, w);
+            }
+        }
+
+        internal static void OnSpring(ulong sender, Unity.Netcode.FastBufferReader reader)
+        {
+            try { byte id; reader.ReadByteSafe(out id); Cocoon.MaskDeath(id); }
+            catch (Exception e) { Plugin.Log.LogError("Mask spring message failed: " + e); }
+        }
+
+        // Host: once the victim's body exists, make the Masked "be" them, then tell every other game to do the same.
+        private static System.Collections.IEnumerator Finish(MaskedPlayerEnemy m, PlayerControllerB victim, int maskType, bool outside, ulong netId)
+        {
+            float t0 = Time.time;
+            while (Time.time - t0 < 10f && (victim == null || !victim.isPlayerDead || (victim.deadBody == null && Time.time - t0 < 3f))) yield return null;
+            ApplyMimic(m, victim, maskType, outside);
+            try
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm == null || victim == null) yield break;
+                using (Unity.Netcode.FastBufferWriter w = new Unity.Netcode.FastBufferWriter(32, Unity.Collections.Allocator.Temp))
+                {
+                    w.WriteValueSafe(netId);
+                    w.WriteByteSafe((byte)victim.playerClientId);
+                    w.WriteValueSafe(maskType);
+                    w.WriteValueSafe(outside);
+                    nm.CustomMessagingManager.SendNamedMessageToAll(MimicName, w);
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Mask mimic message failed: " + e.Message); }
+        }
+
+        internal static void OnMimic(ulong sender, Unity.Netcode.FastBufferReader reader)
+        {
+            try
+            {
+                ulong netId; byte vid; int mt; bool outside;
+                reader.ReadValueSafe(out netId);
+                reader.ReadByteSafe(out vid);
+                reader.ReadValueSafe(out mt);
+                reader.ReadValueSafe(out outside);
+                CocoonRunner.Run(ClientApply(netId, vid, mt, outside));
+            }
+            catch (Exception e) { Plugin.Log.LogError("Mask mimic message failed: " + e); }
+        }
+
+        private static System.Collections.IEnumerator ClientApply(ulong netId, int vid, int maskType, bool outside)
+        {
+            StartOfRound sor = StartOfRound.Instance;
+            if (sor == null || vid < 0 || vid >= sor.allPlayerScripts.Length) yield break;
+            PlayerControllerB v = sor.allPlayerScripts[vid];
+            Unity.Netcode.NetworkObject no = null;
+            float t0 = Time.time;
+            while (Time.time - t0 < 20f)
+            {
+                Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+                if (nm != null && nm.SpawnManager != null && nm.SpawnManager.SpawnedObjects.TryGetValue(netId, out no) && v != null && v.isPlayerDead && (v.deadBody != null || Time.time - t0 > 3f)) break;
+                no = null;
+                yield return null;
+            }
+            if (no == null) { Plugin.Log.LogWarning("Mask mimic: the Masked enemy or the body never arrived on this game."); yield break; }
+            ApplyMimic(no.GetComponent<MaskedPlayerEnemy>(), v, maskType, outside);
+        }
+
+        // The same steps the game takes for a normal mask takeover: the Masked becomes the player, their body is hidden, the spectator view follows it.
+        private static void ApplyMimic(MaskedPlayerEnemy m, PlayerControllerB v, int maskType, bool outside)
+        {
+            try
+            {
+                if (m == null || v == null) return;
+                m.mimickingPlayer = v;
+                m.SetSuit(v.currentSuitID);
+                m.SetEnemyOutside(outside);
+                m.SetMaskType(maskType);
+                v.redirectToEnemy = m;
+                if (v.deadBody != null) v.deadBody.DeactivateBody(false);
+                m.SetVisibilityOfMaskedEnemy();
+                Plugin.Log.LogInfo("Mask trap: the Masked now stands in for player " + v.playerClientId + " on this game.");
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Mask mimic setup failed: " + e.Message); }
+        }
+    }
+
     // A player who is wrapped cannot be taken over by a haunted comedy/tragedy mask: the mask comes off and the takeover is cancelled
     // (otherwise the mask hangs in the air and the hidden body wanders off). The game itself strips the mask item's model when it
     // clamps on, so nothing is left lying on the floor; only the floating head mask and the takeover are removed.
@@ -9031,6 +11231,29 @@ namespace SpiderCocoon
         private static readonly FieldInfo Clamped = MaskType != null ? AccessTools.Field(MaskType, "clampedToHead") : null;
         private static readonly FieldInfo HeadMask = MaskType != null ? AccessTools.Field(MaskType, "currentHeadMask") : null;
         private static readonly MethodInfo Cancel = MaskType != null ? AccessTools.Method(MaskType, "CancelAttachToPlayerOnLocalClient") : null;
+
+        private static readonly FieldInfo TypeId = MaskType != null ? AccessTools.Field(MaskType, "maskTypeId") : null;
+
+        // Is a haunted mask attaching to / clamped on this player right now? (checked before Run cancels it)
+        internal static bool Detect(PlayerControllerB victim, out int typeId)
+        {
+            typeId = 0;
+            try
+            {
+                if (MaskType == null || HeldBy == null || victim == null) return false;
+                foreach (UnityEngine.Object o in UnityEngine.Object.FindObjectsOfType(MaskType))
+                {
+                    if (o == null || HeldBy.GetValue(o) != (object)victim) continue;
+                    bool on = (Attaching != null && (bool)Attaching.GetValue(o)) || (Clamped != null && (bool)Clamped.GetValue(o))
+                        || (HeadMask != null && HeadMask.GetValue(o) as Transform != null);
+                    if (!on) continue;
+                    if (TypeId != null) typeId = (int)TypeId.GetValue(o);
+                    return true;
+                }
+            }
+            catch (Exception) { }
+            return false;
+        }
 
         internal static void Run(PlayerControllerB victim)
         {
@@ -9249,6 +11472,33 @@ namespace SpiderCocoon
             return result;
         }
 
+        // Switches off a material's own light (emission), so a borrowed material cannot make the spider glow.
+        private static void NoGlow(Material m)
+        {
+            try
+            {
+                if (m == null) return;
+                if (m.HasProperty("_EmissiveColor")) m.SetColor("_EmissiveColor", Color.black);
+                if (m.HasProperty("_EmissiveColorLDR")) m.SetColor("_EmissiveColorLDR", Color.black);
+                if (m.HasProperty("_EmissiveColorMap")) m.SetTexture("_EmissiveColorMap", null);
+                if (m.HasProperty("_EmissiveIntensity")) m.SetFloat("_EmissiveIntensity", 0f);
+                m.DisableKeyword("_EMISSIVE_COLOR_MAP");
+                m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
+            }
+            catch (Exception) { }
+        }
+
+        private static bool Glows(Material m)
+        {
+            try
+            {
+                if (m.HasProperty("_EmissiveColor")) { Color c = m.GetColor("_EmissiveColor"); if (c.r + c.g + c.b > 0.03f) return true; }
+                if (m.HasProperty("_EmissiveColorMap") && m.GetTexture("_EmissiveColorMap") != null) return true;
+            }
+            catch (Exception) { }
+            return false;
+        }
+
         private static Material FindDonor()
         {
             if (donorSearched) return donor;
@@ -9263,6 +11513,7 @@ namespace SpiderCocoon
                     if (!m.HasProperty("_SurfaceType") || m.GetFloat("_SurfaceType") < 0.5f) continue; // must be see-through
                     if (!m.HasProperty("_BaseColorMap") || !m.HasProperty("_BaseColor")) continue;
                     if (m.renderQueue < 2900) continue;
+                    if (Glows(m)) continue; // prefer a donor that does not light up
                     string[] kw = m.shaderKeywords;
                     bool odd = false;
                     foreach (string k in kw)
@@ -9319,6 +11570,7 @@ namespace SpiderCocoon
                             dm.SetTextureOffset("_BaseColorMap", orig.GetTextureOffset("_BaseColorMap"));
                             if (dm.HasProperty("_BaseColor")) dm.SetColor("_BaseColor", Color.white);
                             if (dm.HasProperty("_AlphaCutoffEnable")) dm.SetFloat("_AlphaCutoffEnable", 1f);
+                            NoGlow(dm);
                             dm.EnableKeyword("_ALPHATEST_ON");
                             st.Faded[i] = dm;
                             st.Dissolve = true;
@@ -9326,6 +11578,7 @@ namespace SpiderCocoon
                         }
                         Material copy = new Material(donor);
                         copy.name = (orig != null ? orig.name : "spider") + " (faded)";
+                        NoGlow(copy); // the donor (e.g. the door code) glowed bright yellow; the copy must not
                         if (orig != null && orig.HasProperty("_BaseColorMap"))
                         {
                             copy.SetTexture("_BaseColorMap", orig.GetTexture("_BaseColorMap"));
@@ -9384,6 +11637,7 @@ namespace SpiderCocoon
                     remoteStill = st.Speed <= 0.15f;
                 }
                 bool still = !__instance.isEnemyDead
+                    && !Trapdoor.Applies(__instance) && !TrapdoorGrip.Gripping(__instance) && Trapdoor.DepthOf(__instance) <= 0.01f // trapdoor spiders hide underground instead
                     && __instance.currentBehaviourStateIndex != 2
                     && ___currentlyHeldBody == null
                     && !___spoolingPlayerBody

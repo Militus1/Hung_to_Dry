@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.10.0
+The trapdoor spider is rebuilt from the ground up, and a death in the cocoon now has consequences. Everyone in the lobby needs 1.10.0. Some settings were renamed, so check SETTINGS.md if you had changed them (your old values for those are not carried over).
+
+**Trapdoor spider**
+- **Trip-lines:** the spider now waits under a lid with silk trip-lines around it. Step within reach (`TrapdoorTripLineMeters`, 3 m) and it grabs you from below.
+- **Tug of war:** once it has you, mash the struggle key (E by default) to loosen its grip before it drags you under. A teammate who hits the spider makes it let go. The grip can be tuned (`TrapdoorGripStart`, `TrapdoorGripRate`, `TrapdoorMashStep`).
+- **Buried for good:** a dragged-under victim is no longer let go after a while. They stay buried until a teammate digs them out or the timer runs out (`TrapdoorReleaseSeconds`, 0 = never).
+- **A real burrow:** a lid that blends with the ground, an earth rim, and a silk-lined tunnel with roots below (`TrapdoorBurrowModel`). Burrows are dug on open, lit ground rather than in corners.
+- **The view from below:** while buried you look in at your cocoon and the spider through a gap in the tunnel wall, in a faint light, and you can no longer see through the ground to the rest of the map (`UndergroundViewMeters`, `UndergroundLightPercent`).
+- **Weather:** no trapdoor spiders in rain, storms or floods; those spiders stalk instead (`TrapdoorNoSpawnWeather`).
+- **Fix:** the spider no longer climbs all the way out of its burrow after losing its grip on someone.
+
+**Outdoor spiders**
+- Outdoor spiders are now a mix: about half stalk you directly, a third wait in trees and the rest are trapdoor spiders (`StalkDirectPercent`, `TreeWaitPercent`).
+- On moons without trees, a spider that would have waited in a tree digs a burrow instead.
+- **Tree spider:** it starts stalking from closer (`TreeStalkMeters`, 12 m), stays faintly visible when it fades (`TreeCloakPercent`), and its victims now hang at the right height instead of high up in the branches.
+- **Web pull:** a stalking spider now shoots its web when you try to get away from it, instead of at a fixed distance (`WebEscapeMeters`, `WebMaxMeters`).
+- **Caught in the web:** when the web reels you in, the spider grabs you and bites at once. Mash the struggle key to break its grip, but its venom makes that harder (`StalkGrab`, `StalkGrabVenomMashPercent`). Lose and it wraps you on the spot. Break free and it leaves you alone for a few seconds (`StalkGrabCooldownSeconds`), but the venom is still in you: get well away before it wears off.
+- **No giving up:** if the web line snaps, or you break it by ducking behind something, the spider stops reeling and comes after you.
+
+**Ceiling spider**
+- It fades out once it reaches the ceiling by default (`CeilingCloakOn`).
+- **Fix:** it could bite someone while walking to its spot and then leave the victim lying there. It now carries them off.
+
+**Cocoons and masks**
+- **Dead stay hanging:** when the timer runs out the victim dies, but the cocoon stays up. The body only drops once a teammate cuts it open (`DeadStayHanging`).
+- **Haunted masks:** a player wrapped while a mask is taking them over is not saved by the cocoon. The first time someone cuts it open, a Masked that looks like them bursts out (`MaskTrap`).
+
+**Other fixes**
+- Spiders spawned close together no longer tend to all pick the same role.
+- Burrows and buried cocoons are cleared away at the end of a round.
+- Quicksand and water slow you down again right after you are cut free (they used to have no effect on you for a few minutes).
+- A spider on the ceiling no longer flies off into the sky when the whole crew is dead.
+- Cutting open a dead teammate's cocoon no longer briefly muffles their voice again.
+
+If you hit a bug, please [open an issue on GitHub](https://github.com/Militus1/Hung_to_Dry/issues/new/choose) with your log (`BepInEx/LogOutput.log`) and say whether you were the host or a client.
+
 ## 1.9.0
 This is a big update. Spiders are no longer just something you meet indoors, and rescuing a friend now takes thought. Everything below is on by default and can be turned off or tuned in the config (see SETTINGS.md). Everyone in the lobby needs 1.9.0.
 

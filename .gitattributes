@@ -1,0 +1,2 @@
+# The burrow model is read byte for byte by the mod: never convert its line endings.
+*.obj -text
